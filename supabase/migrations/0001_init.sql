@@ -1,5 +1,5 @@
 -- 0001_init.sql — Mule Barber base schema
--- Applied to the dev project via the Supabase SQL editor on 2026-09-23.
+-- Created 2026-09-23
 
 create table services (
   id uuid primary key default gen_random_uuid(),
@@ -15,7 +15,6 @@ create table shop_state (
   accepting_queue boolean not null default true,
   constraint single_row check (id = true)
 );
-insert into shop_state (accepting_queue) values (true);
 alter table shop_state enable row level security;
 
 create table queue_entries (
@@ -35,16 +34,17 @@ create table queue_entries (
 );
 alter table queue_entries enable row level security;
 
--- Read-only policies: the signed-in owner reads via the browser client +
--- Realtime; there are intentionally NO insert/update/delete policies, so
--- all writes are denied for anon/authenticated and go through the
--- service-role key in server code (service_role bypasses RLS by design).
+-- Read-only policies: the authenticated owner reads via the browser client + Realtime.
+-- All writes go through service-role RPC functions (see 0002_queue_functions.sql).
 create policy "owner can read services"
   on services for select to authenticated using (true);
 
 create policy "owner can read todays queue"
   on queue_entries for select to authenticated
   using (queue_date = current_date);
+
+create policy "owner can read shop state"
+  on shop_state for select to authenticated using (true);
 
 -- THE duplicate-join backstop. App logic checks too, but this is the guarantee:
 -- at most one active ('waiting' or 'in_service') row per client per day.
