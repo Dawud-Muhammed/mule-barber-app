@@ -1,13 +1,20 @@
 /**
  * /dashboard
- * Owner queue dashboard with live Realtime updates.
- * Shows in-service entry and waiting queue.
+ * Owner queue dashboard with live Realtime updates and action buttons.
+ * Shows in-service entry, waiting queue, and skipped entries.
  */
 'use client';
 
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import {
+  completeEntry,
+  skipInService,
+  skipWaiting,
+  cancelEntry,
+  requeueSkipped,
+} from '@/app/actions/queue';
 import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
@@ -16,25 +23,38 @@ type Service = Database['public']['Tables']['services']['Row'];
 interface DashboardState {
   inService: QueueEntry | null;
   waiting: QueueEntry[];
+  skipped: QueueEntry[];
   services: Map<string, Service>;
   loading: boolean;
   connectionStatus: 'connected' | 'disconnected' | 'reconnecting' | 'connecting';
   lastUpdate: Date | null;
 }
 
-const RECONNECT_DELAYS = [1000, 2000, 5000, 10000]; // ms, with exponential backoff cap
+interface LoadingState {
+  [key: string]: boolean;
+}
+
+const RECONNECT_DELAYS = [1000, 2000, 5000, 10000];
 
 export default function DashboardPage() {
   const router = useRouter();
   const [state, setState] = useState<DashboardState>({
     inService: null,
     waiting: [],
+    skipped: [],
     services: new Map(),
     loading: true,
-    connectionStatus: 'connecting' as const,
+    connectionStatus: 'connecting',
     lastUpdate: null,
   });
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+  const [loadingActions, setLoadingActions] = useState<LoadingState>({});
+  const [confirmDialog, setConfirmDialog] = useState<{
+    action: string;
+    entryId: string;
+    title: string;
+    message: string;
+  } | null>(null);
+  const [skippedExpanded, setSkippedExpanded] = useState(false);
 
   const reconnectAttempts = useRef(0);
   const realtimeUnsubscribe = useRef<(() => void) | null>(null);
@@ -45,35 +65,32 @@ export default function DashboardPage() {
       const supabase = createClient();
       const today = new Date().toISOString().split('T')[0];
 
-      // Fetch in_service entry
-      const { data: inServiceData } = await supabase
+      // Fetch in_service, waiting, and skipped entries
+      const { data: allData } = await supabase
         .from('queue_entries')
         .select('*')
         .eq('queue_date', today)
-        .eq('status', 'in_service')
-        .single();
-
-      // Fetch waiting entries ordered by queue_number
-      const { data: waitingData } = await supabase
-        .from('queue_entries')
-        .select('*')
-        .eq('queue_date', today)
-        .eq('status', 'waiting')
+        .in('status', ['in_service', 'waiting', 'skipped'])
         .order('queue_number', { ascending: true });
 
-      // Fetch services for display
-      const { data: servicesData } = await supabase
-        .from('services')
-        .select('*');
+      // Fetch services
+      const { data: servicesData } = await supabase.from('services').select('*');
 
-      setState((prev) => ({
-        ...prev,
-        inService: inServiceData || null,
-        waiting: waitingData || [],
-        services: new Map((servicesData || []).map((s) => [s.id, s])),
-        connectionStatus: 'connected',
-        lastUpdate: new Date(),
-      }));
+      if (allData) {
+        const inServiceEntry = allData.find((e) => e.status === 'in_service') || null;
+        const waitingEntries = allData.filter((e) => e.status === 'waiting');
+        const skippedEntries = allData.filter((e) => e.status === 'skipped');
+
+        setState((prev) => ({
+          ...prev,
+          inService: inServiceEntry,
+          waiting: waitingEntries,
+          skipped: skippedEntries,
+          services: new Map((servicesData || []).map((s) => [s.id, s])),
+          connectionStatus: 'connected',
+          lastUpdate: new Date(),
+        }));
+      }
 
       reconnectAttempts.current = 0;
     } catch (err) {
@@ -91,12 +108,10 @@ export default function DashboardPage() {
       const supabase = createClient();
       const today = new Date().toISOString().split('T')[0];
 
-      // Unsubscribe from previous channel if exists
       if (realtimeUnsubscribe.current) {
         realtimeUnsubscribe.current();
       }
 
-      // Subscribe to all queue_entries changes for today
       const channel = supabase
         .channel(`queue-${today}`)
         .on(
@@ -109,7 +124,6 @@ export default function DashboardPage() {
           },
           (payload) => {
             console.log('[realtime] update received:', payload);
-            // Re-fetch data on any change
             fetchQueueData();
           }
         )
@@ -141,17 +155,15 @@ export default function DashboardPage() {
     }
   }, [fetchQueueData]);
 
-  // Handle Realtime disconnection with backoff retry
+  // Handle reconnect
   const handleReconnect = useCallback(() => {
     if (reconnectAttempts.current >= RECONNECT_DELAYS.length) {
-      // Cap at final delay
       reconnectAttempts.current = RECONNECT_DELAYS.length - 1;
     }
 
     const delay = RECONNECT_DELAYS[reconnectAttempts.current];
     reconnectAttempts.current++;
 
-    console.log('[realtime] reconnecting in', delay, 'ms');
     setState((prev) => ({
       ...prev,
       connectionStatus: 'reconnecting',
@@ -162,7 +174,7 @@ export default function DashboardPage() {
     }, delay);
   }, [subscribeToRealtimeUpdates]);
 
-  // Initial setup: check auth, fetch data, subscribe
+  // Initial setup
   useEffect(() => {
     const init = async () => {
       const supabase = createClient();
@@ -175,7 +187,6 @@ export default function DashboardPage() {
         return;
       }
 
-      setIsAuthenticated(true);
       await fetchQueueData();
       subscribeToRealtimeUpdates();
     };
@@ -189,15 +200,125 @@ export default function DashboardPage() {
     };
   }, [fetchQueueData, subscribeToRealtimeUpdates, router]);
 
-  // Watch for disconnection and attempt reconnect
+  // Watch for disconnection
   useEffect(() => {
     if (state.connectionStatus === 'disconnected') {
       const timer = setTimeout(() => {
         handleReconnect();
-      }, 2000); // Brief delay before attempting
+      }, 2000);
       return () => clearTimeout(timer);
     }
   }, [state.connectionStatus, handleReconnect]);
+
+  // Action handlers
+  const handleCompleteEntry = async () => {
+    if (!state.inService) return;
+
+    const entryId = state.inService.id;
+    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
+
+    try {
+      const result = await completeEntry(entryId);
+      if (result.success) {
+        // Optimistic update: mark as completed
+        setState((prev) => ({
+          ...prev,
+          inService:
+            result.promotedEntry || null,
+        }));
+      }
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
+    }
+  };
+
+  const handleSkipInService = async () => {
+    if (!state.inService) return;
+
+    const entryId = state.inService.id;
+    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
+
+    try {
+      const result = await skipInService(entryId);
+      if (result.success) {
+        setState((prev) => ({
+          ...prev,
+          inService: result.promotedEntry || null,
+        }));
+      }
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
+    }
+  };
+
+  const handleSkipWaiting = async (entryId: string) => {
+    setConfirmDialog({
+      action: 'skip_waiting',
+      entryId,
+      title: 'Skip Entry?',
+      message: 'This will remove them from the queue. They can rejoin anytime.',
+    });
+  };
+
+  const handleCancelEntry = async (entryId: string) => {
+    setConfirmDialog({
+      action: 'cancel',
+      entryId,
+      title: 'Cancel Entry?',
+      message: 'This will remove them from the queue. They can rejoin anytime.',
+    });
+  };
+
+  const handleRequeueSkipped = async (entry: QueueEntry) => {
+    if (!entry.telegram_chat_id || !entry.service_id) return;
+
+    setLoadingActions((prev) => ({ ...prev, [entry.id]: true }));
+
+    try {
+      const result = await requeueSkipped(
+        entry.telegram_chat_id,
+        entry.client_name || '',
+        entry.service_id
+      );
+      if (result.success) {
+        // Optimistic: remove from skipped, add to waiting
+        setState((prev) => ({
+          ...prev,
+          skipped: prev.skipped.filter((e) => e.id !== entry.id),
+        }));
+        // Realtime will fetch and reconcile
+      }
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, [entry.id]: false }));
+    }
+  };
+
+  // Execute confirmed action
+  const executeConfirmedAction = async () => {
+    if (!confirmDialog) return;
+
+    const { action, entryId } = confirmDialog;
+    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
+
+    try {
+      if (action === 'skip_waiting') {
+        await skipWaiting(entryId);
+        setState((prev) => ({
+          ...prev,
+          waiting: prev.waiting.filter((e) => e.id !== entryId),
+        }));
+      } else if (action === 'cancel') {
+        await cancelEntry(entryId);
+        setState((prev) => ({
+          ...prev,
+          waiting: prev.waiting.filter((e) => e.id !== entryId),
+        }));
+      }
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
+      setConfirmDialog(null);
+    }
+  };
 
   const getServiceName = (serviceId: string | null) => {
     if (!serviceId) return 'Service';
@@ -238,11 +359,7 @@ export default function DashboardPage() {
                 ? 'bg-amber-600 animate-pulse'
                 : 'bg-red-600'
             }`} />
-            <span className="text-sm font-medium">
-              {state.connectionStatus === 'reconnecting'
-                ? 'Connection lost — reconnecting...'
-                : 'Connection lost — reconnecting...'}
-            </span>
+            <span className="text-sm font-medium">Connection lost — reconnecting...</span>
           </div>
         </div>
       )}
@@ -257,27 +374,47 @@ export default function DashboardPage() {
 
           <div className="p-6">
             {state.inService ? (
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-5xl font-bold text-blue-600 mb-2">
-                    Queue #{state.inService.queue_number}
-                  </p>
-                  <p className="text-xl text-slate-700">
-                    {state.inService.client_name || 'Guest'}
-                  </p>
-                  <p className="text-sm text-slate-500 mt-1">
-                    {getServiceName(state.inService.service_id)}
-                  </p>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-5xl font-bold text-blue-600 mb-2">
+                      Queue #{state.inService.queue_number}
+                    </p>
+                    <p className="text-xl text-slate-700">
+                      {state.inService.client_name || 'Guest'}
+                    </p>
+                    <p className="text-sm text-slate-500 mt-1">
+                      {getServiceName(state.inService.service_id)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-sm text-slate-600">
+                      Since {state.inService.started_at
+                        ? new Date(state.inService.started_at).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '—'}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm text-slate-600">
-                    Since {state.inService.started_at
-                      ? new Date(state.inService.started_at).toLocaleTimeString([], {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })
-                      : '—'}
-                  </p>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3 pt-4 border-t border-slate-200">
+                  <button
+                    onClick={handleCompleteEntry}
+                    disabled={loadingActions[state.inService.id]}
+                    className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-600 disabled:opacity-50 text-white font-medium rounded-lg transition-colors disabled:cursor-not-allowed"
+                  >
+                    {loadingActions[state.inService.id] ? 'Completing...' : '✓ Complete Customer'}
+                  </button>
+                  <button
+                    onClick={handleSkipInService}
+                    disabled={loadingActions[state.inService.id]}
+                    className="flex-1 px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:bg-amber-600 disabled:opacity-50 text-white font-medium rounded-lg transition-colors disabled:cursor-not-allowed"
+                  >
+                    {loadingActions[state.inService.id] ? 'Skipping...' : '⊘ Skip (No-show)'}
+                  </button>
                 </div>
               </div>
             ) : (
@@ -321,13 +458,29 @@ export default function DashboardPage() {
                         {getServiceName(entry.service_id)}
                       </p>
                     </div>
-                    <div className="flex-shrink-0 text-right">
+                    <div className="flex-shrink-0 text-right mr-4">
                       <p className="text-xs text-slate-500">
                         {new Date(entry.joined_at).toLocaleTimeString([], {
                           hour: '2-digit',
                           minute: '2-digit',
                         })}
                       </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleSkipWaiting(entry.id)}
+                        disabled={loadingActions[entry.id]}
+                        className="px-3 py-1 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-500 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors disabled:cursor-not-allowed"
+                      >
+                        Skip
+                      </button>
+                      <button
+                        onClick={() => handleCancelEntry(entry.id)}
+                        disabled={loadingActions[entry.id]}
+                        className="px-3 py-1 bg-red-500 hover:bg-red-600 disabled:bg-red-500 disabled:opacity-50 text-white text-sm font-medium rounded transition-colors disabled:cursor-not-allowed"
+                      >
+                        Cancel
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -336,7 +489,56 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Refresh Button (Fallback) */}
+        {/* Skipped Today (Collapsible) */}
+        {state.skipped.length > 0 && (
+          <div className="bg-white rounded-lg shadow-md border border-slate-200 overflow-hidden">
+            <button
+              onClick={() => setSkippedExpanded(!skippedExpanded)}
+              className="w-full bg-slate-100 hover:bg-slate-200 px-6 py-4 flex items-center justify-between transition-colors"
+            >
+              <h2 className="text-lg font-bold text-slate-900">
+                Skipped Today ({state.skipped.length})
+              </h2>
+              <span className={`transform transition-transform ${skippedExpanded ? 'rotate-180' : ''}`}>
+                ▼
+              </span>
+            </button>
+
+            {skippedExpanded && (
+              <div className="p-6 space-y-2 border-t border-slate-200">
+                {state.skipped.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="flex items-center gap-4 p-4 bg-slate-50 rounded-lg border border-slate-200 hover:bg-slate-100 transition-colors"
+                  >
+                    <div className="flex-shrink-0 w-12 h-12 bg-slate-200 rounded-lg flex items-center justify-center">
+                      <span className="text-lg font-bold text-slate-700">
+                        #{entry.queue_number}
+                      </span>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-slate-900">
+                        {entry.client_name || 'Guest'}
+                      </p>
+                      <p className="text-sm text-slate-600">
+                        {getServiceName(entry.service_id)}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => handleRequeueSkipped(entry)}
+                      disabled={loadingActions[entry.id]}
+                      className="px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:bg-blue-500 disabled:opacity-50 text-white font-medium rounded transition-colors disabled:cursor-not-allowed"
+                    >
+                      {loadingActions[entry.id] ? 'Requeuing...' : 'Requeue'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Refresh Button */}
         <div className="text-center">
           <button
             onClick={() => fetchQueueData()}
@@ -351,6 +553,33 @@ export default function DashboardPage() {
           Last update: {state.lastUpdate?.toLocaleTimeString() || 'loading...'}
         </div>
       </div>
+
+      {/* Confirm Dialog */}
+      {confirmDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-lg p-6 max-w-sm">
+            <h3 className="text-lg font-bold text-slate-900 mb-2">
+              {confirmDialog.title}
+            </h3>
+            <p className="text-slate-600 mb-6">{confirmDialog.message}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-900 font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={executeConfirmedAction}
+                disabled={loadingActions[confirmDialog.entryId]}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-600 disabled:opacity-50 text-white font-medium rounded-lg transition-colors disabled:cursor-not-allowed"
+              >
+                {loadingActions[confirmDialog.entryId] ? 'Processing...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
