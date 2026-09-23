@@ -193,46 +193,39 @@ export async function requeueSkipped(
 }
 
 /**
- * Join the queue (from Telegram bot or dashboard).
- * This is called by the bot's assign_queue_number() RPC.
- * For Phase 5, we need to trigger notifications when a new entry is created.
- * However, the bot calls assign_queue_number() directly via RPC.
- * This server action exists for potential dashboard client joins in future phases.
+ * Toggle the shop's queue acceptance status.
  */
-export async function joinQueue(
-  chatId: number,
-  clientName: string,
-  serviceId: string
-): Promise<QueueActionResult> {
+export async function toggleQueueStatus(): Promise<QueueActionResult> {
   try {
     const admin = createAdminClient();
 
-    const { data, error } = await admin.rpc('assign_queue_number', {
-      p_telegram_chat_id: chatId,
-      p_client_name: clientName,
-      p_service_id: serviceId,
-    });
+    // Fetch current state
+    const { data: currentState, error: fetchError } = await admin
+      .from('shop_state')
+      .select('accepting_queue')
+      .eq('id', true)
+      .single();
 
-    if (error) {
-      console.error('[joinQueue] RPC error:', error);
-      return { success: false, error: 'Failed to join queue' };
+    if (fetchError || !currentState) {
+      console.error('[toggleQueueStatus] fetch error:', fetchError);
+      return { success: false, error: 'Failed to toggle queue status' };
     }
 
-    const response = data as any;
-    if (!response?.success) {
-      return {
-        success: false,
-        error: response?.error || 'Failed to join queue',
-      };
-    }
+    // Toggle
+    const newStatus = !currentState.accepting_queue;
+    const { error: updateError } = await admin
+      .from('shop_state')
+      .update({ accepting_queue: newStatus })
+      .eq('id', true);
 
-    // New joiner: send applicable notifications immediately
-    const newEntryId = response.id;
-    sendNewJoinerNotifications(newEntryId);
+    if (updateError) {
+      console.error('[toggleQueueStatus] update error:', updateError);
+      return { success: false, error: 'Failed to update queue status' };
+    }
 
     return { success: true, promotedEntry: null };
   } catch (err) {
-    console.error('[joinQueue] error:', err);
+    console.error('[toggleQueueStatus] error:', err);
     return { success: false, error: 'Unexpected error' };
   }
 }
