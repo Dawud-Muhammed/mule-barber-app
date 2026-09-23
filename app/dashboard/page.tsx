@@ -15,6 +15,7 @@ import {
   cancelEntry,
   requeueSkipped,
 } from '@/app/actions/queue';
+import { hasUnsendNotification } from '@/lib/notificationRules';
 import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
@@ -55,6 +56,7 @@ export default function DashboardPage() {
     message: string;
   } | null>(null);
   const [skippedExpanded, setSkippedExpanded] = useState(false);
+  const [unsentNotifications, setUnsentNotifications] = useState<Set<string>>(new Set());
 
   const reconnectAttempts = useRef(0);
   const realtimeUnsubscribe = useRef<(() => void) | null>(null);
@@ -90,6 +92,16 @@ export default function DashboardPage() {
           connectionStatus: 'connected',
           lastUpdate: new Date(),
         }));
+
+        // Check for unsent notifications on waiting entries
+        const unsent = new Set<string>();
+        for (const entry of waitingEntries) {
+          const hasUnsent = await hasUnsendNotification(entry.id);
+          if (hasUnsent) {
+            unsent.add(entry.id);
+          }
+        }
+        setUnsentNotifications(unsent);
       }
 
       reconnectAttempts.current = 0;
@@ -451,9 +463,14 @@ export default function DashboardPage() {
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-slate-900">
-                        {entry.client_name || 'Guest'}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-slate-900">
+                          {entry.client_name || 'Guest'}
+                        </p>
+                        {unsentNotifications.has(entry.id) && (
+                          <span className="text-lg" title="Notification not sent">⚠️</span>
+                        )}
+                      </div>
                       <p className="text-sm text-slate-600">
                         {getServiceName(entry.service_id)}
                       </p>

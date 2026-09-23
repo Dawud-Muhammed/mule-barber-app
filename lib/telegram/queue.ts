@@ -1,8 +1,10 @@
 /**
  * Telegram queue operations: joining and position checking.
  * Uses admin client to call RPC functions (service-role bypass).
+ * Triggers Phase 5 notifications on new joins.
  */
 import { createAdminClient } from '@/lib/supabase/admin';
+import { sendNewJoinerNotifications } from '@/lib/notificationRules';
 import { QueueEntryRow } from './context';
 
 interface JoinQueueResult {
@@ -25,6 +27,7 @@ interface PositionResult {
 /**
  * Call assign_queue_number() RPC to atomically join the queue.
  * Handles business logic errors (duplicate, closed).
+ * Triggers Phase 5 notifications for new joiners.
  */
 export async function joinQueue(
   chatId: number,
@@ -82,6 +85,9 @@ export async function joinQueue(
     }
 
     const countAhead = count ?? 0;
+
+    // Trigger Phase 5 notifications for new joiner (fire-and-forget)
+    sendNewJoinerNotifications(response.id);
 
     return {
       success: true,
