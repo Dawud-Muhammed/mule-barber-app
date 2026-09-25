@@ -18,33 +18,21 @@ interface NotificationLog {
 const logs: NotificationLog[] = [];
 
 /**
- * Get notification message in English and Amharic based on position
+ * Get notification message based on position
  */
 function getNotificationMessage(messageType: NotificationType): string {
   const messages: Record<NotificationType, string> = {
-    pos_4: `📍 YOU ARE IN POSITION 4
-3 people ahead of you. You're getting close!
+    pos_4: `📍 You are in position 4
+3 people ahead of you. You're getting close!`,
 
-📍 ለዚህ ሰዓት ስም 4 ተኛ ነብሥ
-3 ሰዎች ከእርስዎ ዛቅደም ናቸው። እየጠጉ ነው!`,
+    pos_3: `📍 You are in position 3
+2 people ahead. Almost your turn!`,
 
-    pos_3: `📍 YOU ARE IN POSITION 3
-2 people ahead of you. Almost your turn!
+    pos_2: `🎯 You are in position 2
+1 person ahead. You're next!`,
 
-📍 ለዚህ ሰዓት ስም 3 ተኛ ነብሥ
-2 ሰዎች ከእርስዎ ዛቅደም ናቸው። ምናልባትም ይህ ሰዓት ነው!`,
-
-    pos_2: `🎯 YOU ARE IN POSITION 2
-1 person ahead. You're next!
-
-🎯 ለዚህ ሰዓት ስም 2 ተኛ ነብሥ
-1 ሰው ከእርስዎ ዛቅደም ነው። አሁን ቅደም ተከተል ወደ እርስዎ ነው!`,
-
-    pos_1: `🎉 YOU ARE IN POSITION 1 - YOU'RE UP!
-Come to the barber now!
-
-🎉 ለዚህ ሰዓት ስም 1 ተኛ ነብሥ - አሁን ሰላምታ ነው!
-ወደ ሞጣር አሁንም ነው!`,
+    pos_1: `🎉 You are in position 1 - YOU'RE UP!
+Come to the barber now!`,
   };
 
   return messages[messageType];

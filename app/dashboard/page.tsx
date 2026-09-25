@@ -24,6 +24,7 @@ type Service = Database['public']['Tables']['services']['Row'];
 interface DashboardState {
   inService: QueueEntry | null;
   waiting: QueueEntry[];
+  completed: QueueEntry[];
   skipped: QueueEntry[];
   services: Map<string, Service>;
   loading: boolean;
@@ -42,6 +43,7 @@ export default function DashboardPage() {
   const [state, setState] = useState<DashboardState>({
     inService: null,
     waiting: [],
+    completed: [],
     skipped: [],
     services: new Map(),
     loading: true,
@@ -67,12 +69,12 @@ export default function DashboardPage() {
       const supabase = createClient();
       const today = new Date().toISOString().split('T')[0];
 
-      // Fetch in_service, waiting, and skipped entries
+      // Fetch in_service, waiting, completed, and skipped entries
       const { data: allData } = await supabase
         .from('queue_entries')
         .select('*')
         .eq('queue_date', today)
-        .in('status', ['in_service', 'waiting', 'skipped'])
+        .in('status', ['in_service', 'waiting', 'completed', 'skipped'])
         .order('queue_number', { ascending: true });
 
       // Fetch services
@@ -81,12 +83,14 @@ export default function DashboardPage() {
       if (allData) {
         const inServiceEntry = allData.find((e) => e.status === 'in_service') || null;
         const waitingEntries = allData.filter((e) => e.status === 'waiting');
+        const completedEntries = allData.filter((e) => e.status === 'completed');
         const skippedEntries = allData.filter((e) => e.status === 'skipped');
 
         setState((prev) => ({
           ...prev,
           inService: inServiceEntry,
           waiting: waitingEntries,
+          completed: completedEntries,
           skipped: skippedEntries,
           services: new Map((servicesData || []).map((s) => [s.id, s])),
           connectionStatus: 'connected',
@@ -505,6 +509,50 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* Completed Today (Collapsible) */}
+        {state.completed.length > 0 && (
+          <div className="bg-white rounded-lg shadow-md border border-slate-200 overflow-hidden">
+            <button
+              onClick={() => setSkippedExpanded(false)}
+              className="w-full bg-green-100 hover:bg-green-200 px-6 py-4 flex items-center justify-between transition-colors"
+            >
+              <h2 className="text-lg font-bold text-green-900">
+                Completed Today ({state.completed.length})
+              </h2>
+            </button>
+
+            <div className="p-6 space-y-2 border-t border-slate-200">
+              {state.completed.map((entry) => (
+                <div
+                  key={entry.id}
+                  className="flex items-center gap-4 p-4 bg-green-50 rounded-lg border border-green-200"
+                >
+                  <div className="flex-shrink-0 w-12 h-12 bg-green-200 rounded-lg flex items-center justify-center">
+                    <span className="text-lg font-bold text-green-700">
+                      #{entry.queue_number}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-slate-900">
+                      {entry.client_name || 'Guest'}
+                    </p>
+                    <p className="text-sm text-slate-600">
+                      {getServiceName(entry.service_id)}
+                    </p>
+                  </div>
+                  <div className="text-right text-xs text-slate-500">
+                    <p>✓ Completed</p>
+                    <p>{new Date(entry.completed_at || '').toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Skipped Today (Collapsible) */}
         {state.skipped.length > 0 && (
