@@ -1,6 +1,6 @@
 /**
  * POST /api/telegram/webhook
- * Telegram webhook endpoint using grammy's built-in adapter
+ * Telegram webhook endpoint using grammy
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createBot } from '@/lib/telegram/bot';
@@ -20,6 +20,43 @@ function validateWebhookSecret(request: NextRequest): boolean {
   return querySecret === expectedSecret;
 }
 
+// Cache the initialized bot (module-level)
+let cachedBot: any = null;
+let botInitPromise: Promise<any> | null = null;
+
+/**
+ * Get or create initialized bot
+ */
+async function getInitializedBot() {
+  // If already initialized, return cached bot
+  if (cachedBot) {
+    return cachedBot;
+  }
+
+  // If initialization is in progress, wait for it
+  if (botInitPromise) {
+    return botInitPromise;
+  }
+
+  // Start initialization
+  botInitPromise = (async () => {
+    try {
+      const bot = createBot();
+      console.log('[webhook] Initializing bot...');
+      await bot.init();
+      console.log('[webhook] Bot initialized successfully');
+      cachedBot = bot;
+      return bot;
+    } catch (err) {
+      console.error('[webhook] Failed to initialize bot:', err);
+      botInitPromise = null; // Reset so next request retries
+      throw err;
+    }
+  })();
+
+  return botInitPromise;
+}
+
 /**
  * POST handler: Receive and process Telegram webhook updates
  */
@@ -35,11 +72,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const body = await request.json();
     console.log('[webhook] Received update from Telegram');
 
-    // Create bot instance
-    const bot = createBot();
+    // Get initialized bot
+    const bot = await getInitializedBot();
 
     // Process the update
-    // bot.handleUpdate(update) returns void, so we just call it
     await bot.handleUpdate(body);
 
     return NextResponse.json({ ok: true }, { status: 200 });
