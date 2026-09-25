@@ -2,6 +2,10 @@
  * Position-based notification rules and flag management.
  * Determines which notifications to send based on queue position and flags.
  * Implements success-only flag rule: flags only set after successful send.
+ * 
+ * Notification rules:
+ * - When position reaches 2 (1 person ahead): send "you're next"
+ * - When position reaches 4 (3 people ahead): send "getting close"
  */
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sendTelegramMessage } from '@/lib/notifications';
@@ -25,26 +29,30 @@ export async function computeNotificationsToSend(): Promise<NotificationToSend[]
     const admin = createAdminClient();
     const today = new Date().toISOString().split('T')[0];
 
-    // Get all waiting entries ordered by queue_number
-    const { data: waitingEntries, error } = await admin
+    // Get all waiting+in_service entries ordered by queue_number to compute real positions
+    const { data: allActiveEntries, error } = await admin
       .from('queue_entries')
-      .select('id, queue_number, telegram_chat_id, notified_close, notified_next')
+      .select('id, queue_number, telegram_chat_id, status, notified_close, notified_next')
       .eq('queue_date', today)
-      .eq('status', 'waiting')
+      .in('status', ['waiting', 'in_service'])
       .order('queue_number', { ascending: true });
 
-    if (error || !waitingEntries) {
+    if (error || !allActiveEntries) {
       console.error('[notificationRules] query error:', error);
       return [];
     }
 
     const toSend: NotificationToSend[] = [];
 
-    waitingEntries.forEach((entry, index) => {
-      const position = index + 1; // 1-indexed position
+    // For each waiting entry, calculate how many people are ahead
+    allActiveEntries.forEach((entry, index) => {
+      if (entry.status !== 'waiting') return; // Only notify waiting entries
 
-      // Position <= 3: check for "getting close" notification
-      if (position <= 3 && !entry.notified_close) {
+      const position = index + 1; // 1-indexed position in queue
+      const countAhead = position - 1; // How many people are ahead
+
+      // Position = 4 (3 people ahead): send "getting close" message
+      if (position === 4 && !entry.notified_close) {
         toSend.push({
           type: 'close',
           chatId: entry.telegram_chat_id,
@@ -52,8 +60,8 @@ export async function computeNotificationsToSend(): Promise<NotificationToSend[]
         });
       }
 
-      // Position = 1: check for "you're next" notification
-      if (position === 1 && !entry.notified_next) {
+      // Position = 2 (1 person ahead): send "you're next" message
+      if (position === 2 && !entry.notified_next) {
         toSend.push({
           type: 'next',
           chatId: entry.telegram_chat_id,
@@ -120,32 +128,38 @@ export async function sendAndUpdateNotifications(
 
 /**
  * Check if a specific entry needs a notification.
- * Used by dashboard to show ⚠️ for entries at position <= 3 with notified_close = false.
+ * Used by dashboard to show ⚠️ for entries at position 4 or 2 with unsent notifications.
  */
 export async function hasUnsendNotification(entryId: string): Promise<boolean> {
   try {
     const admin = createAdminClient();
     const today = new Date().toISOString().split('T')[0];
 
-    // Get all waiting entries
-    const { data: waitingEntries, error } = await admin
+    // Get all active entries (waiting + in_service)
+    const { data: allActiveEntries, error } = await admin
       .from('queue_entries')
-      .select('id, queue_number, notified_close')
+      .select('id, status, notified_close, notified_next')
       .eq('queue_date', today)
-      .eq('status', 'waiting')
+      .in('status', ['waiting', 'in_service'])
       .order('queue_number', { ascending: true });
 
-    if (error || !waitingEntries) return false;
+    if (error || !allActiveEntries) return false;
 
     // Find this entry and its position
-    const index = waitingEntries.findIndex((e) => e.id === entryId);
+    const index = allActiveEntries.findIndex((e) => e.id === entryId);
     if (index === -1) return false;
 
-    const position = index + 1;
-    const entry = waitingEntries[index];
+    // Skip if not waiting (don't notify in_service entries)
+    if (allActiveEntries[index].status !== 'waiting') return false;
 
-    // Warning if: position <= 3 AND notified_close = false
-    return position <= 3 && !entry.notified_close;
+    const position = index + 1;
+    const entry = allActiveEntries[index];
+
+    // Warning if: position is 4 or 2 AND notification flag is false
+    if (position === 4 && !entry.notified_close) return true;
+    if (position === 2 && !entry.notified_next) return true;
+
+    return false;
   } catch (err) {
     console.error('[notificationRules] hasUnsendNotification error:', err);
     return false;
@@ -153,7 +167,7 @@ export async function hasUnsendNotification(entryId: string): Promise<boolean> {
 }
 
 /**
- * Special case: new joiner at position <= 3.
+ * Special case: new joiner at position 4 or 2.
  * Send applicable messages immediately, in order (close before next).
  */
 export async function sendNewJoinerNotifications(entryId: string): Promise<void> {
@@ -164,7 +178,7 @@ export async function sendNewJoinerNotifications(entryId: string): Promise<void>
     // Get the new entry
     const { data: entry, error } = await admin
       .from('queue_entries')
-      .select('id, queue_number, telegram_chat_id, notified_close, notified_next')
+      .select('id, telegram_chat_id, notified_close, notified_next')
       .eq('id', entryId)
       .single();
 
@@ -173,20 +187,21 @@ export async function sendNewJoinerNotifications(entryId: string): Promise<void>
       return;
     }
 
-    // Get all waiting entries to compute position
-    const { data: waitingEntries } = await admin
+    // Get all active entries to compute position
+    const { data: allActiveEntries } = await admin
       .from('queue_entries')
-      .select('id')
+      .select('id, status')
       .eq('queue_date', today)
-      .eq('status', 'waiting')
+      .in('status', ['waiting', 'in_service'])
       .order('queue_number', { ascending: true });
 
-    if (!waitingEntries) return;
+    if (!allActiveEntries) return;
 
-    const position = waitingEntries.findIndex((e) => e.id === entryId) + 1;
+    const index = allActiveEntries.findIndex((e) => e.id === entryId);
+    const position = index + 1;
 
-    // Send messages in order
-    if (position <= 3 && !entry.notified_close) {
+    // Send "getting close" if position is 4
+    if (position === 4 && !entry.notified_close) {
       const closeSent = await sendTelegramMessage(entry.telegram_chat_id, entryId, 'close');
       if (closeSent) {
         await admin
@@ -196,7 +211,8 @@ export async function sendNewJoinerNotifications(entryId: string): Promise<void>
       }
     }
 
-    if (position === 1 && !entry.notified_next) {
+    // Send "you're next" if position is 2
+    if (position === 2 && !entry.notified_next) {
       const nextSent = await sendTelegramMessage(entry.telegram_chat_id, entryId, 'next');
       if (nextSent) {
         await admin

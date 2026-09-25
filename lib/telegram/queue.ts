@@ -72,12 +72,12 @@ export async function joinQueue(
       };
     }
 
-    // Count how many entries are ahead (waiting with lower queue_number)
+    // Count how many entries are ahead (waiting or in_service with lower queue_number)
     const { count, error: countError } = await admin
       .from('queue_entries')
       .select('id', { count: 'exact', head: true })
       .eq('queue_date', new Date().toISOString().split('T')[0])
-      .eq('status', 'waiting')
+      .in('status', ['waiting', 'in_service'])
       .lt('queue_number', response.queue_number);
 
     if (countError) {
@@ -108,6 +108,7 @@ export async function joinQueue(
 /**
  * Find the user's active queue entry for today and calculate their position.
  * Returns position if active, or error if none.
+ * Position counts: people with lower queue_number that are either 'waiting' or 'in_service'
  */
 export async function checkPosition(chatId: number): Promise<PositionResult> {
   try {
@@ -139,12 +140,12 @@ export async function checkPosition(chatId: number): Promise<PositionResult> {
 
     const entry = entries[0];
 
-    // Count how many are ahead
+    // Count how many are ahead (people with lower queue_number who are waiting or being served)
     const { count: countAhead, error: countError } = await admin
       .from('queue_entries')
       .select('id', { count: 'exact', head: true })
       .eq('queue_date', today)
-      .eq('status', 'waiting')
+      .in('status', ['waiting', 'in_service'])
       .lt('queue_number', entry.queue_number);
 
     if (countError) {
