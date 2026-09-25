@@ -100,8 +100,7 @@ $$ language plpgsql security definer;
 -- Atomically transitions the queue forward:
 --   - If action = 'next': mark current in_service as completed, mark next waiting as in_service
 --   - If action = 'skip': mark current in_service as skipped, mark next waiting as in_service
---   - If action = 'cancel': mark specified entry as cancelled
--- Returns json with the transition result and the new in_service entry (if any)
+-- Returns json with success flag and new_in_service_entry (full row object or null)
 create or replace function advance_queue(
   p_action text,
   p_entry_id uuid
@@ -110,15 +109,10 @@ returns json as $$
 declare
   v_current_entry record;
   v_next_entry record;
-  v_action_result json;
 begin
   -- Validate action
-  if p_action not in ('next', 'skip', 'cancel') then
-    return json_build_object(
-      'success', false,
-      'error', 'Invalid action',
-      'error_code', 'invalid_action'
-    );
+  if p_action not in ('next', 'skip') then
+    return json_build_object('success', false, 'error', 'Invalid action');
   end if;
 
   -- Get the entry being acted upon
@@ -128,38 +122,18 @@ begin
       and queue_date = current_date;
 
   if v_current_entry is null then
-    return json_build_object(
-      'success', false,
-      'error', 'Entry not found or not from today',
-      'error_code', 'entry_not_found'
-    );
+    return json_build_object('success', false, 'error', 'Entry not found');
   end if;
 
-  -- Handle cancel action (simple: just mark as cancelled)
-  if p_action = 'cancel' then
-    update queue_entries
-      set status = 'cancelled'
-      where id = p_entry_id;
-    
-    return json_build_object(
-      'success', true,
-      'action', 'cancel',
-      'cancelled_entry_id', p_entry_id,
-      'new_in_service_entry', null
-    );
-  end if;
-
-  -- For 'next' and 'skip', mark current as completed/skipped and advance the queue
+  -- Mark current as completed or skipped
   if p_action = 'next' then
     update queue_entries
       set status = 'completed', completed_at = now()
       where id = p_entry_id;
-    v_action_result := json_build_object('action', 'next', 'previous_status', 'completed');
   elsif p_action = 'skip' then
     update queue_entries
       set status = 'skipped', completed_at = now()
       where id = p_entry_id;
-    v_action_result := json_build_object('action', 'skip', 'previous_status', 'skipped');
   end if;
 
   -- Find and transition the next waiting entry to in_service
@@ -177,21 +151,12 @@ begin
     
     return json_build_object(
       'success', true,
-      'previous_entry', v_action_result,
-      'new_in_service_entry', json_build_object(
-        'id', v_next_entry.id,
-        'queue_number', v_next_entry.queue_number,
-        'client_name', v_next_entry.client_name,
-        'service_id', v_next_entry.service_id
-      )
+      'new_in_service_entry', row_to_json(v_next_entry)
     );
   else
-    -- No more entries in queue
     return json_build_object(
       'success', true,
-      'previous_entry', v_action_result,
-      'new_in_service_entry', null,
-      'message', 'Queue is now empty'
+      'new_in_service_entry', null
     );
   end if;
 end;

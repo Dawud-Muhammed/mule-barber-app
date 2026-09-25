@@ -54,11 +54,14 @@ export async function completeEntry(entryId: string): Promise<QueueActionResult>
       return { success: false, error: 'Failed to complete entry' };
     }
 
+    console.log('[completeEntry] RPC response:', data);
+
     // Trigger notifications (fire-and-forget)
     triggerNotifications();
 
-    const promotedEntry = (data as any)?.new_in_service_entry || null;
-    return { success: true, promotedEntry };
+    const result = data as any;
+    const promotedEntry = result?.new_in_service_entry || null;
+    return { success: result?.success !== false, promotedEntry };
   } catch (err) {
     console.error('[completeEntry] error:', err);
     return { success: false, error: 'Unexpected error' };
@@ -83,11 +86,14 @@ export async function skipInService(entryId: string): Promise<QueueActionResult>
       return { success: false, error: 'Failed to skip entry' };
     }
 
+    console.log('[skipInService] RPC response:', data);
+
     // Trigger notifications
     triggerNotifications();
 
-    const promotedEntry = (data as any)?.new_in_service_entry || null;
-    return { success: true, promotedEntry };
+    const result = data as any;
+    const promotedEntry = result?.new_in_service_entry || null;
+    return { success: result?.success !== false, promotedEntry };
   } catch (err) {
     console.error('[skipInService] error:', err);
     return { success: false, error: 'Unexpected error' };

@@ -190,6 +190,8 @@ export default function DashboardPage() {
     if (!state.inService) return;
 
     const entryId = state.inService.id;
+    const completedEntry = state.inService;
+    
     setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
     setError(null);
 
@@ -204,8 +206,8 @@ export default function DashboardPage() {
       // Immediate UI update
       setState((prev) => ({
         ...prev,
-        inService: result.promotedEntry || null,
-        completed: [...prev.completed, { ...prev.inService!, status: 'completed' as const }],
+        inService: (result.promotedEntry as any) || null,
+        completed: [...prev.completed, { ...completedEntry, status: 'completed' as const }],
       }));
     } catch (err) {
       setError('Network error');
@@ -219,6 +221,8 @@ export default function DashboardPage() {
     if (!state.inService) return;
 
     const entryId = state.inService.id;
+    const skippedEntry = state.inService;
+    
     setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
     setError(null);
 
@@ -233,8 +237,8 @@ export default function DashboardPage() {
       // Immediate UI update
       setState((prev) => ({
         ...prev,
-        inService: result.promotedEntry || null,
-        skipped: [...prev.skipped, { ...prev.inService!, status: 'skipped' as const }],
+        inService: (result.promotedEntry as any) || null,
+        skipped: [...prev.skipped, { ...skippedEntry, status: 'skipped' as const }],
       }));
     } catch (err) {
       setError('Network error');
