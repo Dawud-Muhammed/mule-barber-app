@@ -1,19 +1,54 @@
 /**
  * Notification service for sending Telegram messages to clients.
- * Used by Phase 5 auto-notifications.
+ * Used by auto-notifications based on queue position.
  * Handles API calls, logging, and never breaks the triggering action.
  */
+
+export type NotificationType = 'pos_4' | 'pos_3' | 'pos_2' | 'pos_1';
 
 interface NotificationLog {
   timestamp: string;
   chatId: number;
   entryId: string;
-  messageType: 'close' | 'next';
+  messageType: NotificationType;
   success: boolean;
   error?: string;
 }
 
 const logs: NotificationLog[] = [];
+
+/**
+ * Get notification message in English and Amharic based on position
+ */
+function getNotificationMessage(messageType: NotificationType): string {
+  const messages: Record<NotificationType, string> = {
+    pos_4: `📍 YOU ARE IN POSITION 4
+3 people ahead of you. You're getting close!
+
+📍 ለዚህ ሰዓት ስም 4 ተኛ ነብሥ
+3 ሰዎች ከእርስዎ ዛቅደም ናቸው። እየጠጉ ነው!`,
+
+    pos_3: `📍 YOU ARE IN POSITION 3
+2 people ahead of you. Almost your turn!
+
+📍 ለዚህ ሰዓት ስም 3 ተኛ ነብሥ
+2 ሰዎች ከእርስዎ ዛቅደም ናቸው። ምናልባትም ይህ ሰዓት ነው!`,
+
+    pos_2: `🎯 YOU ARE IN POSITION 2
+1 person ahead. You're next!
+
+🎯 ለዚህ ሰዓት ስም 2 ተኛ ነብሥ
+1 ሰው ከእርስዎ ዛቅደም ነው። አሁን ቅደም ተከተል ወደ እርስዎ ነው!`,
+
+    pos_1: `🎉 YOU ARE IN POSITION 1 - YOU'RE UP!
+Come to the barber now!
+
+🎉 ለዚህ ሰዓት ስም 1 ተኛ ነብሥ - አሁን ሰላምታ ነው!
+ወደ ሞጣር አሁንም ነው!`,
+  };
+
+  return messages[messageType];
+}
 
 /**
  * Send a Telegram message to a client.
@@ -23,7 +58,7 @@ const logs: NotificationLog[] = [];
 export async function sendTelegramMessage(
   chatId: number,
   entryId: string,
-  messageType: 'close' | 'next'
+  messageType: NotificationType
 ): Promise<boolean> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!botToken) {
@@ -38,10 +73,7 @@ export async function sendTelegramMessage(
   }
 
   try {
-    const text =
-      messageType === 'close'
-        ? "📍 You're getting close! There are 3 or fewer people ahead of you in the queue."
-        : "🎯 You're up next! Come on in when you're ready.";
+    const text = getNotificationMessage(messageType);
 
     const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',

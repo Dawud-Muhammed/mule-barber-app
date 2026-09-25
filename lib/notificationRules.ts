@@ -1,27 +1,23 @@
 /**
- * Position-based notification rules and flag management.
- * Determines which notifications to send based on queue position and flags.
+ * Position-based notification rules with support for positions 4, 3, 2, 1.
+ * Sends bilingual messages (English + Amharic) when customers reach each position.
  * Implements success-only flag rule: flags only set after successful send.
- * 
- * Notification rules:
- * - When position reaches 2 (1 person ahead): send "you're next"
- * - When position reaches 4 (3 people ahead): send "getting close"
  */
 import { createAdminClient } from '@/lib/supabase/admin';
-import { sendTelegramMessage } from '@/lib/notifications';
+import { sendTelegramMessage, type NotificationType } from '@/lib/notifications';
 import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
 
 interface NotificationToSend {
-  type: 'close' | 'next';
+  type: NotificationType;
   chatId: number;
   entryId: string;
 }
 
 /**
  * Compute today's waiting positions and determine notifications to send.
- * Returns list of notifications to send in order (close before next).
+ * Returns list of notifications to send.
  * Does NOT send yet (caller handles sending + flag updates).
  */
 export async function computeNotificationsToSend(): Promise<NotificationToSend[]> {
@@ -29,13 +25,13 @@ export async function computeNotificationsToSend(): Promise<NotificationToSend[]
     const admin = createAdminClient();
     const today = new Date().toISOString().split('T')[0];
 
-    // Get all waiting+in_service entries ordered by queue_number to compute real positions
+    // Get all active entries (waiting + in_service) ordered by queue_number
     const { data: allActiveEntries, error } = await admin
       .from('queue_entries')
-      .select('id, queue_number, telegram_chat_id, status, notified_close, notified_next')
+      .select('*')
       .eq('queue_date', today)
       .in('status', ['waiting', 'in_service'])
-      .order('queue_number', { ascending: true });
+      .order('queue_number', { ascending: true }) as any;
 
     if (error || !allActiveEntries) {
       console.error('[notificationRules] query error:', error);
@@ -44,26 +40,43 @@ export async function computeNotificationsToSend(): Promise<NotificationToSend[]
 
     const toSend: NotificationToSend[] = [];
 
-    // For each waiting entry, calculate how many people are ahead
-    allActiveEntries.forEach((entry, index) => {
+    // For each waiting entry, calculate its position and check if notification needed
+    (allActiveEntries as any[]).forEach((entry: any, index: number) => {
       if (entry.status !== 'waiting') return; // Only notify waiting entries
 
       const position = index + 1; // 1-indexed position in queue
-      const countAhead = position - 1; // How many people are ahead
 
-      // Position = 4 (3 people ahead): send "getting close" message
-      if (position === 4 && !entry.notified_close) {
+      // Position 4: send if not yet notified
+      if (position === 4 && !entry.notified_pos_4) {
         toSend.push({
-          type: 'close',
+          type: 'pos_4',
           chatId: entry.telegram_chat_id,
           entryId: entry.id,
         });
       }
 
-      // Position = 2 (1 person ahead): send "you're next" message
-      if (position === 2 && !entry.notified_next) {
+      // Position 3: send if not yet notified
+      if (position === 3 && !entry.notified_pos_3) {
         toSend.push({
-          type: 'next',
+          type: 'pos_3',
+          chatId: entry.telegram_chat_id,
+          entryId: entry.id,
+        });
+      }
+
+      // Position 2: send if not yet notified
+      if (position === 2 && !entry.notified_pos_2) {
+        toSend.push({
+          type: 'pos_2',
+          chatId: entry.telegram_chat_id,
+          entryId: entry.id,
+        });
+      }
+
+      // Position 1: send if not yet notified
+      if (position === 1 && !entry.notified_pos_1) {
+        toSend.push({
+          type: 'pos_1',
           chatId: entry.telegram_chat_id,
           entryId: entry.id,
         });
@@ -79,7 +92,6 @@ export async function computeNotificationsToSend(): Promise<NotificationToSend[]
 
 /**
  * Send all notifications and update flags (success-only rule).
- * Sends in order: close messages first, then next messages.
  * Flags only set after successful send.
  * Returns count of notifications sent.
  */
@@ -97,10 +109,14 @@ export async function sendAndUpdateNotifications(
 
     if (success) {
       // Success-only rule: update flag ONLY if send succeeded
-      const updateData =
-        type === 'close'
-          ? { notified_close: true }
-          : { notified_next: true };
+      const flagMap: Record<NotificationType, string> = {
+        pos_4: 'notified_pos_4',
+        pos_3: 'notified_pos_3',
+        pos_2: 'notified_pos_2',
+        pos_1: 'notified_pos_1',
+      };
+
+      const updateData = { [flagMap[type]]: true } as any;
 
       const { error } = await admin
         .from('queue_entries')
@@ -127,37 +143,39 @@ export async function sendAndUpdateNotifications(
 }
 
 /**
- * Check if a specific entry needs a notification.
- * Used by dashboard to show ⚠️ for entries at position 4 or 2 with unsent notifications.
+ * Check if a specific entry has unsent notifications.
+ * Used by dashboard to show ⚠️ for entries needing notification.
  */
 export async function hasUnsendNotification(entryId: string): Promise<boolean> {
   try {
     const admin = createAdminClient();
     const today = new Date().toISOString().split('T')[0];
 
-    // Get all active entries (waiting + in_service)
+    // Get all active entries
     const { data: allActiveEntries, error } = await admin
       .from('queue_entries')
-      .select('id, status, notified_close, notified_next')
+      .select('*')
       .eq('queue_date', today)
       .in('status', ['waiting', 'in_service'])
-      .order('queue_number', { ascending: true });
+      .order('queue_number', { ascending: true }) as any;
 
     if (error || !allActiveEntries) return false;
 
     // Find this entry and its position
-    const index = allActiveEntries.findIndex((e) => e.id === entryId);
+    const index = (allActiveEntries as any[]).findIndex((e) => e.id === entryId);
     if (index === -1) return false;
 
-    // Skip if not waiting (don't notify in_service entries)
-    if (allActiveEntries[index].status !== 'waiting') return false;
+    // Skip if not waiting (don't warn for in_service entries)
+    if ((allActiveEntries as any[])[index].status !== 'waiting') return false;
 
     const position = index + 1;
-    const entry = allActiveEntries[index];
+    const entry = (allActiveEntries as any[])[index];
 
-    // Warning if: position is 4 or 2 AND notification flag is false
-    if (position === 4 && !entry.notified_close) return true;
-    if (position === 2 && !entry.notified_next) return true;
+    // Check if any notification at this position is unsent
+    if (position === 4 && !entry.notified_pos_4) return true;
+    if (position === 3 && !entry.notified_pos_3) return true;
+    if (position === 2 && !entry.notified_pos_2) return true;
+    if (position === 1 && !entry.notified_pos_1) return true;
 
     return false;
   } catch (err) {
@@ -167,8 +185,8 @@ export async function hasUnsendNotification(entryId: string): Promise<boolean> {
 }
 
 /**
- * Special case: new joiner at position 4 or 2.
- * Send applicable messages immediately, in order (close before next).
+ * Special case: new joiner at position 4, 3, 2, or 1.
+ * Send applicable messages immediately.
  */
 export async function sendNewJoinerNotifications(entryId: string): Promise<void> {
   try {
@@ -178,9 +196,9 @@ export async function sendNewJoinerNotifications(entryId: string): Promise<void>
     // Get the new entry
     const { data: entry, error } = await admin
       .from('queue_entries')
-      .select('id, telegram_chat_id, notified_close, notified_next')
+      .select('*')
       .eq('id', entryId)
-      .single();
+      .single() as any;
 
     if (error || !entry) {
       console.error('[notificationRules] could not fetch new entry:', error);
@@ -193,32 +211,30 @@ export async function sendNewJoinerNotifications(entryId: string): Promise<void>
       .select('id, status')
       .eq('queue_date', today)
       .in('status', ['waiting', 'in_service'])
-      .order('queue_number', { ascending: true });
+      .order('queue_number', { ascending: true }) as any;
 
     if (!allActiveEntries) return;
 
-    const index = allActiveEntries.findIndex((e) => e.id === entryId);
+    const index = (allActiveEntries as any[]).findIndex((e) => e.id === entryId);
     const position = index + 1;
 
-    // Send "getting close" if position is 4
-    if (position === 4 && !entry.notified_close) {
-      const closeSent = await sendTelegramMessage(entry.telegram_chat_id, entryId, 'close');
-      if (closeSent) {
-        await admin
-          .from('queue_entries')
-          .update({ notified_close: true })
-          .eq('id', entryId);
-      }
-    }
+    const notificationMap: Record<number, { flag: string; type: NotificationType }> = {
+      4: { flag: 'notified_pos_4', type: 'pos_4' },
+      3: { flag: 'notified_pos_3', type: 'pos_3' },
+      2: { flag: 'notified_pos_2', type: 'pos_2' },
+      1: { flag: 'notified_pos_1', type: 'pos_1' },
+    };
 
-    // Send "you're next" if position is 2
-    if (position === 2 && !entry.notified_next) {
-      const nextSent = await sendTelegramMessage(entry.telegram_chat_id, entryId, 'next');
-      if (nextSent) {
-        await admin
-          .from('queue_entries')
-          .update({ notified_next: true })
-          .eq('id', entryId);
+    if (position in notificationMap) {
+      const { flag, type } = notificationMap[position];
+      if (!(entry as any)[flag]) {
+        const sent = await sendTelegramMessage(entry.telegram_chat_id, entryId, type);
+        if (sent) {
+          await admin
+            .from('queue_entries')
+            .update({ [flag]: true } as any)
+            .eq('id', entryId);
+        }
       }
     }
   } catch (err) {
