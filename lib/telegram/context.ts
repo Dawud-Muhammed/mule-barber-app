@@ -13,9 +13,11 @@ export type ServiceRow = Database['public']['Tables']['services']['Row'];
  */
 export interface SessionData {
   // Current flow state
-  step?: 'selecting_service' | 'confirming_join';
+  step?: 'selecting_service' | 'awaiting_name' | 'awaiting_phone' | 'confirming_join';
   selectedServiceId?: string;
   selectedServiceName?: string;
+  clientName?: string;
+  clientPhone?: string;
 
   // User's cached active entry (refreshed on demand)
   activeEntry?: QueueEntryRow | null;

@@ -4,8 +4,9 @@
  * Triggers Phase 5 notifications on new joins.
  */
 import { createAdminClient } from '@/lib/supabase/admin';
-import { sendNewJoinerNotifications } from '@/lib/notificationRules';
-import { QueueEntryRow } from './context';
+import { notifyQueueStateChange } from '@/lib/notificationRules';
+import { getShopDate } from '@/lib/shopDate';
+import type { QueueEntryRow } from './context';
 
 interface JoinQueueResult {
   success: boolean;
@@ -14,6 +15,8 @@ interface JoinQueueResult {
   queueNumber?: number;
   entryId?: string;
   countAhead?: number;
+  clientName?: string | null;
+  clientPhone?: string | null;
 }
 
 interface PositionResult {
@@ -32,53 +35,47 @@ interface PositionResult {
 export async function joinQueue(
   chatId: number,
   clientName: string,
+  clientPhone: string,
   serviceId: string
 ): Promise<JoinQueueResult> {
   try {
     const admin = createAdminClient();
+    const today = getShopDate();
 
-    // Call the RPC function
     const { data, error } = await admin.rpc('assign_queue_number', {
+      p_queue_date: today,
       p_telegram_chat_id: chatId,
       p_client_name: clientName,
+      p_client_phone: clientPhone,
       p_service_id: serviceId,
     });
 
     if (error) {
       console.error('[joinQueue] RPC error:', error);
+      const isClosed = error.message === 'queue_closed';
       return {
         success: false,
-        error: 'Database error',
-        errorCode: 'db_error',
+        error: isClosed ? 'Queue closed' : 'Generic failure',
+        errorCode: isClosed ? 'shop_closed' : 'db_error',
       };
     }
 
-    // data is JSON returned by the PL/pgSQL function
-    // Type guard for the response
-    if (!data || typeof data !== 'object' || !('success' in data)) {
+    if (!data) {
       return {
         success: false,
-        error: 'Invalid response',
+        error: 'Generic failure',
         errorCode: 'invalid_response',
       };
     }
 
-    const response = data as any;
-    if (!response.success) {
-      return {
-        success: false,
-        error: response.error || 'Unknown error',
-        errorCode: response.error_code,
-      };
-    }
+    const entry = data as unknown as QueueEntryRow;
 
-    // Count how many entries are ahead (waiting or in_service with lower queue_number)
     const { count, error: countError } = await admin
       .from('queue_entries')
       .select('id', { count: 'exact', head: true })
-      .eq('queue_date', new Date().toISOString().split('T')[0])
+      .eq('queue_date', today)
       .in('status', ['waiting', 'in_service'])
-      .lt('queue_number', response.queue_number);
+      .lt('queue_number', entry.queue_number);
 
     if (countError) {
       console.error('[joinQueue] count ahead error:', countError);
@@ -86,14 +83,15 @@ export async function joinQueue(
 
     const countAhead = count ?? 0;
 
-    // Trigger Phase 5 notifications for new joiner (fire-and-forget)
-    sendNewJoinerNotifications(response.id);
+    await notifyQueueStateChange();
 
     return {
       success: true,
-      queueNumber: response.queue_number,
-      entryId: response.id,
+      queueNumber: entry.queue_number,
+      entryId: entry.id,
       countAhead,
+      clientName: entry.client_name,
+      clientPhone: entry.client_phone,
     };
   } catch (err) {
     console.error('[joinQueue] unexpected error:', err);
@@ -113,7 +111,7 @@ export async function joinQueue(
 export async function checkPosition(chatId: number): Promise<PositionResult> {
   try {
     const admin = createAdminClient();
-    const today = new Date().toISOString().split('T')[0];
+    const today = getShopDate();
 
     // Get the user's active entry for today
     const { data: entries, error: queryError } = await admin

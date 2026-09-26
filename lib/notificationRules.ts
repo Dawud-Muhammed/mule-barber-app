@@ -1,243 +1,108 @@
-/**
- * Position-based notification rules with support for positions 4, 3, 2, 1.
- * Sends bilingual messages (English + Amharic) when customers reach each position.
- * Implements success-only flag rule: flags only set after successful send.
- */
 import { createAdminClient } from '@/lib/supabase/admin';
+import { getShopDate } from '@/lib/shopDate';
 import { sendTelegramMessage, type NotificationType } from '@/lib/notifications';
 import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
 
-interface NotificationToSend {
+type NotificationTarget = {
+  entry: QueueEntry;
   type: NotificationType;
-  chatId: number;
-  entryId: string;
+  flag: 'notified_promoted' | 'notified_pos_1' | 'notified_pos_2' | 'notified_pos_3' | 'notified_terminal' | 'notified_cancelled' | 'notified_skipped';
+};
+
+function targetForPosition(entry: QueueEntry, position: number): NotificationTarget | null {
+  if (position === 1) return { entry, type: 'pos_1', flag: 'notified_pos_1' };
+  if (position === 2) return { entry, type: 'pos_2', flag: 'notified_pos_2' };
+  if (position === 3) return { entry, type: 'pos_3', flag: 'notified_pos_3' };
+  if (position === 4) return { entry, type: 'terminal', flag: 'notified_terminal' };
+  return null;
 }
 
-/**
- * Compute today's waiting positions and determine notifications to send.
- * Returns list of notifications to send.
- * Does NOT send yet (caller handles sending + flag updates).
- */
-export async function computeNotificationsToSend(): Promise<NotificationToSend[]> {
-  try {
-    const admin = createAdminClient();
-    const today = new Date().toISOString().split('T')[0];
-
-    // Get all active entries (waiting + in_service) ordered by queue_number
-    const { data: allActiveEntries, error } = await admin
-      .from('queue_entries')
-      .select('*')
-      .eq('queue_date', today)
-      .in('status', ['waiting', 'in_service'])
-      .order('queue_number', { ascending: true }) as any;
-
-    if (error || !allActiveEntries) {
-      console.error('[notificationRules] query error:', error);
-      return [];
-    }
-
-    const toSend: NotificationToSend[] = [];
-
-    // For each waiting entry, calculate its position and check if notification needed
-    (allActiveEntries as any[]).forEach((entry: any, index: number) => {
-      if (entry.status !== 'waiting') return; // Only notify waiting entries
-
-      const position = index + 1; // 1-indexed position in queue
-
-      // Position 4: send if not yet notified
-      if (position === 4 && !entry.notified_pos_4) {
-        toSend.push({
-          type: 'pos_4',
-          chatId: entry.telegram_chat_id,
-          entryId: entry.id,
-        });
-      }
-
-      // Position 3: send if not yet notified
-      if (position === 3 && !entry.notified_pos_3) {
-        toSend.push({
-          type: 'pos_3',
-          chatId: entry.telegram_chat_id,
-          entryId: entry.id,
-        });
-      }
-
-      // Position 2: send if not yet notified
-      if (position === 2 && !entry.notified_pos_2) {
-        toSend.push({
-          type: 'pos_2',
-          chatId: entry.telegram_chat_id,
-          entryId: entry.id,
-        });
-      }
-
-      // Position 1: send if not yet notified
-      if (position === 1 && !entry.notified_pos_1) {
-        toSend.push({
-          type: 'pos_1',
-          chatId: entry.telegram_chat_id,
-          entryId: entry.id,
-        });
-      }
-    });
-
-    return toSend;
-  } catch (err) {
-    console.error('[notificationRules] error:', err);
-    return [];
-  }
-}
-
-/**
- * Send all notifications and update flags (success-only rule).
- * Flags only set after successful send.
- * Returns count of notifications sent.
- */
-export async function sendAndUpdateNotifications(
-  notificationsToSend: NotificationToSend[]
-): Promise<number> {
+async function claimAndSend(target: NotificationTarget): Promise<void> {
   const admin = createAdminClient();
-  let sentCount = 0;
+  const { data: claimed, error: claimError } = await admin
+    .from('queue_entries')
+    .update({ [target.flag]: true, notification_error: null } as never)
+    .eq('id', target.entry.id)
+    .eq(target.flag as never, false)
+    .select('id')
+    .maybeSingle();
 
-  for (const notification of notificationsToSend) {
-    const { type, chatId, entryId } = notification;
+  if (claimError || !claimed) return;
 
-    // Attempt to send
-    const success = await sendTelegramMessage(chatId, entryId, type);
+  const result = await sendTelegramMessage(target.entry.telegram_chat_id, target.type);
+  if (result.success) return;
 
-    if (success) {
-      // Success-only rule: update flag ONLY if send succeeded
-      const flagMap: Record<NotificationType, string> = {
-        pos_4: 'notified_pos_4',
-        pos_3: 'notified_pos_3',
-        pos_2: 'notified_pos_2',
-        pos_1: 'notified_pos_1',
-      };
-
-      const updateData = { [flagMap[type]]: true } as any;
-
-      const { error } = await admin
-        .from('queue_entries')
-        .update(updateData)
-        .eq('id', entryId);
-
-      if (error) {
-        console.error(
-          `[notificationRules] failed to update flag for ${entryId}:`,
-          error
-        );
-      } else {
-        sentCount++;
-      }
-    } else {
-      // Failed to send: flag remains false so next action retries
-      console.error(
-        `[notificationRules] message ${type} not sent to ${chatId}, flag left false for retry`
-      );
-    }
-  }
-
-  return sentCount;
+  await admin
+    .from('queue_entries')
+    .update({ [target.flag]: false, notification_error: result.error || 'Telegram delivery failed' } as never)
+    .eq('id', target.entry.id)
+    .eq(target.flag as never, true);
 }
 
-/**
- * Check if a specific entry has unsent notifications.
- * Used by dashboard to show ⚠️ for entries needing notification.
- */
-export async function hasUnsendNotification(entryId: string): Promise<boolean> {
-  try {
-    const admin = createAdminClient();
-    const today = new Date().toISOString().split('T')[0];
+export async function notifyQueueStateChange(): Promise<void> {
+  const admin = createAdminClient();
+  const today = getShopDate();
+  const { data, error } = await admin
+    .from('queue_entries')
+    .select('*')
+    .eq('queue_date', today)
+    .in('status', ['waiting', 'in_service'])
+    .order('queue_number', { ascending: true });
 
-    // Get all active entries
-    const { data: allActiveEntries, error } = await admin
-      .from('queue_entries')
-      .select('*')
-      .eq('queue_date', today)
-      .in('status', ['waiting', 'in_service'])
-      .order('queue_number', { ascending: true }) as any;
+  if (error || !data) return;
+  const entries = data as QueueEntry[];
+  const inService = entries.find((entry) => entry.status === 'in_service');
 
-    if (error || !allActiveEntries) return false;
+  if (inService) {
+    await claimAndSend({ entry: inService, type: 'promoted', flag: 'notified_promoted' });
+  }
 
-    // Find this entry and its position
-    const index = (allActiveEntries as any[]).findIndex((e) => e.id === entryId);
-    if (index === -1) return false;
-
-    // Skip if not waiting (don't warn for in_service entries)
-    if ((allActiveEntries as any[])[index].status !== 'waiting') return false;
-
-    const position = index + 1;
-    const entry = (allActiveEntries as any[])[index];
-
-    // Check if any notification at this position is unsent
-    if (position === 4 && !entry.notified_pos_4) return true;
-    if (position === 3 && !entry.notified_pos_3) return true;
-    if (position === 2 && !entry.notified_pos_2) return true;
-    if (position === 1 && !entry.notified_pos_1) return true;
-
-    return false;
-  } catch (err) {
-    console.error('[notificationRules] hasUnsendNotification error:', err);
-    return false;
+  const waiting = entries.filter((entry) => entry.status === 'waiting');
+  for (const position of [4, 3, 2, 1]) {
+    const target = waiting[position - 1] ? targetForPosition(waiting[position - 1], position) : null;
+    if (target) await claimAndSend(target);
   }
 }
 
-/**
- * Special case: new joiner at position 4, 3, 2, or 1.
- * Send applicable messages immediately.
- */
-export async function sendNewJoinerNotifications(entryId: string): Promise<void> {
-  try {
-    const admin = createAdminClient();
-    const today = new Date().toISOString().split('T')[0];
+export async function hasNotificationError(entryId: string): Promise<boolean> {
+  const admin = createAdminClient();
+  const { data } = await admin
+    .from('queue_entries')
+    .select('notification_error')
+    .eq('id', entryId)
+    .maybeSingle();
+  return Boolean(data?.notification_error);
+}
 
-    // Get the new entry
-    const { data: entry, error } = await admin
-      .from('queue_entries')
-      .select('*')
-      .eq('id', entryId)
-      .single() as any;
+export async function notifyTerminalEntry(
+  entryId: string,
+  type: 'cancelled' | 'skipped'
+): Promise<void> {
+  const admin = createAdminClient();
+  const flag = type === 'cancelled' ? 'notified_cancelled' : 'notified_skipped';
+  const { data: entry } = await admin
+    .from('queue_entries')
+    .select('telegram_chat_id')
+    .eq('id', entryId)
+    .maybeSingle();
+  if (!entry) return;
 
-    if (error || !entry) {
-      console.error('[notificationRules] could not fetch new entry:', error);
-      return;
-    }
+  const { data: claimed } = await admin
+    .from('queue_entries')
+    .update({ [flag]: true, notification_error: null } as never)
+    .eq('id', entryId)
+    .eq(flag as never, false)
+    .select('id')
+    .maybeSingle();
+  if (!claimed) return;
 
-    // Get all active entries to compute position
-    const { data: allActiveEntries } = await admin
-      .from('queue_entries')
-      .select('id, status')
-      .eq('queue_date', today)
-      .in('status', ['waiting', 'in_service'])
-      .order('queue_number', { ascending: true }) as any;
-
-    if (!allActiveEntries) return;
-
-    const index = (allActiveEntries as any[]).findIndex((e) => e.id === entryId);
-    const position = index + 1;
-
-    const notificationMap: Record<number, { flag: string; type: NotificationType }> = {
-      4: { flag: 'notified_pos_4', type: 'pos_4' },
-      3: { flag: 'notified_pos_3', type: 'pos_3' },
-      2: { flag: 'notified_pos_2', type: 'pos_2' },
-      1: { flag: 'notified_pos_1', type: 'pos_1' },
-    };
-
-    if (position in notificationMap) {
-      const { flag, type } = notificationMap[position];
-      if (!(entry as any)[flag]) {
-        const sent = await sendTelegramMessage(entry.telegram_chat_id, entryId, type);
-        if (sent) {
-          await admin
-            .from('queue_entries')
-            .update({ [flag]: true } as any)
-            .eq('id', entryId);
-        }
-      }
-    }
-  } catch (err) {
-    console.error('[notificationRules] sendNewJoinerNotifications error:', err);
-  }
+  const result = await sendTelegramMessage(entry.telegram_chat_id, type);
+  if (result.success) return;
+  await admin
+    .from('queue_entries')
+    .update({ [flag]: false, notification_error: result.error || 'Telegram delivery failed' } as never)
+    .eq('id', entryId)
+    .eq(flag as never, true);
 }

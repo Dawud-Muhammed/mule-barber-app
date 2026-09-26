@@ -1,137 +1,45 @@
-/**
- * Notification service for sending Telegram messages to clients.
- * Used by auto-notifications based on queue position.
- * Handles API calls, logging, and never breaks the triggering action.
- */
+export type NotificationType = 'promoted' | 'pos_1' | 'pos_2' | 'pos_3' | 'terminal' | 'cancelled' | 'skipped';
 
-export type NotificationType = 'pos_4' | 'pos_3' | 'pos_2' | 'pos_1';
-
-interface NotificationLog {
-  timestamp: string;
-  chatId: number;
-  entryId: string;
-  messageType: NotificationType;
+export interface TelegramSendResult {
   success: boolean;
   error?: string;
 }
 
-const logs: NotificationLog[] = [];
-
-/**
- * Get notification message based on position
- */
-function getNotificationMessage(messageType: NotificationType): string {
+export function getNotificationMessage(type: NotificationType): string {
   const messages: Record<NotificationType, string> = {
-    pos_4: `📍 You are in position 4
-3 people ahead of you. You're getting close!`,
-
-    pos_3: `📍 You are in position 3
-2 people ahead. Almost your turn!`,
-
-    pos_2: `🎯 You are in position 2
-1 person ahead. You're next!`,
-
-    pos_1: `🎉 You are in position 1 - YOU'RE UP!
-Come to the barber now!`,
+    promoted: 'It is your turn now. Please come in.',
+    pos_1: 'You are next. Please get ready.',
+    pos_2: '1 person is ahead of you.',
+    pos_3: '2 people are ahead of you.',
+    terminal: '3 people are ahead of you.',
+    cancelled: 'Your spot was cancelled. If this is a mistake, message us.',
+    skipped: 'We moved to the next person because we could not reach you. Message us to rejoin.',
   };
 
-  return messages[messageType];
+  return messages[type];
 }
 
-/**
- * Send a Telegram message to a client.
- * Returns true if successful, false if failed.
- * Logs all failures with structured data (never throws).
- */
 export async function sendTelegramMessage(
   chatId: number,
-  entryId: string,
-  messageType: NotificationType
-): Promise<boolean> {
+  type: NotificationType,
+  text = getNotificationMessage(type)
+): Promise<TelegramSendResult> {
   const botToken = process.env.TELEGRAM_BOT_TOKEN;
-  if (!botToken) {
-    logNotification({
-      chatId,
-      entryId,
-      messageType,
-      success: false,
-      error: 'TELEGRAM_BOT_TOKEN not set',
-    });
-    return false;
-  }
+  if (!botToken) return { success: false, error: 'Telegram is unavailable' };
 
   try {
-    const text = getNotificationMessage(messageType);
-
     const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-      }),
+      body: JSON.stringify({ chat_id: chatId, text }),
     });
 
     if (!response.ok) {
-      const errorData = await response.text();
-      logNotification({
-        chatId,
-        entryId,
-        messageType,
-        success: false,
-        error: `Telegram API error: ${response.status} ${errorData}`,
-      });
-      return false;
+      return { success: false, error: `Telegram delivery failed (${response.status})` };
     }
 
-    logNotification({
-      chatId,
-      entryId,
-      messageType,
-      success: true,
-    });
-    return true;
-  } catch (err) {
-    logNotification({
-      chatId,
-      entryId,
-      messageType,
-      success: false,
-      error: err instanceof Error ? err.message : 'Unknown error',
-    });
-    return false;
+    return { success: true };
+  } catch {
+    return { success: false, error: 'Telegram is unavailable' };
   }
-}
-
-/**
- * Log a notification attempt (success or failure).
- * Structured logging with timestamp, chat_id, entry_id, error.
- */
-function logNotification(data: Omit<NotificationLog, 'timestamp'>) {
-  const log = {
-    ...data,
-    timestamp: new Date().toISOString(),
-  };
-
-  logs.push(log);
-
-  if (data.success) {
-    console.log(`[notification] sent ${data.messageType} to chat ${data.chatId}:`, log);
-  } else {
-    console.error(`[notification] failed ${data.messageType} to chat ${data.chatId}:`, log);
-  }
-}
-
-/**
- * Get all logged notifications (for debugging).
- */
-export function getNotificationLogs() {
-  return logs;
-}
-
-/**
- * Clear all logged notifications.
- */
-export function clearNotificationLogs() {
-  logs.length = 0;
 }

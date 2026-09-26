@@ -3,7 +3,9 @@
  * Telegram webhook endpoint using grammy
  */
 import { NextRequest, NextResponse } from 'next/server';
+import type { Bot } from 'grammy';
 import { createBot } from '@/lib/telegram/bot';
+import type { BotContext } from '@/lib/telegram/context';
 
 /**
  * Validate webhook secret from query parameter
@@ -21,8 +23,8 @@ function validateWebhookSecret(request: NextRequest): boolean {
 }
 
 // Cache the initialized bot (module-level)
-let cachedBot: any = null;
-let botInitPromise: Promise<any> | null = null;
+let cachedBot: Bot<BotContext> | null = null;
+let botInitPromise: Promise<Bot<BotContext>> | null = null;
 
 /**
  * Get or create initialized bot

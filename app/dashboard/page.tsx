@@ -1,658 +1,134 @@
-/**
- * /dashboard
- * Mobile-first queue dashboard. Built for phones first, scales to desktop.
- * Responsive layout, touch-friendly buttons, real-time updates.
- */
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import { getShopDate } from '@/lib/shopDate';
 import {
+  cancelEntry,
   completeEntry,
+  requeueEntry,
   skipInService,
   skipWaiting,
-  cancelEntry,
-  requeueSkipped,
+  startService,
+  toggleQueueStatus,
 } from '@/app/actions/queue';
 import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
 type Service = Database['public']['Tables']['services']['Row'];
+type Tab = 'live' | 'done' | 'skipped';
 
-interface DashboardState {
-  inService: QueueEntry | null;
-  waiting: QueueEntry[];
-  completed: QueueEntry[];
-  skipped: QueueEntry[];
-  cancelled: QueueEntry[];
-  services: Map<string, Service>;
-  loading: boolean;
-}
-
-interface LoadingState {
-  [key: string]: boolean;
+function Identity({ entry }: { entry: QueueEntry }) {
+  return (
+    <div>
+      <p className="font-semibold text-white">{entry.client_name || 'Guest'}</p>
+      {entry.client_phone && (
+        <a className="text-sm text-blue-300 underline" href={`tel:${entry.client_phone}`}>
+          {entry.client_phone}
+        </a>
+      )}
+    </div>
+  );
 }
 
 export default function DashboardPage() {
   const router = useRouter();
-  const [state, setState] = useState<DashboardState>({
-    inService: null,
-    waiting: [],
-    completed: [],
-    skipped: [],
-    cancelled: [],
-    services: new Map(),
-    loading: true,
-  });
-  const [loadingActions, setLoadingActions] = useState<LoadingState>({});
+  const [tab, setTab] = useState<Tab>('live');
+  const [inService, setInService] = useState<QueueEntry | null>(null);
+  const [waiting, setWaiting] = useState<QueueEntry[]>([]);
+  const [done, setDone] = useState<QueueEntry[]>([]);
+  const [skipped, setSkipped] = useState<QueueEntry[]>([]);
+  const [services, setServices] = useState<Map<string, Service>>(new Map());
+  const [acceptingQueue, setAcceptingQueue] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['waiting']));
 
-  const realtimeUnsubscribe = useRef<(() => void) | null>(null);
-
-  // Fetch today's queue data
-  const fetchQueueData = useCallback(async () => {
-    try {
-      const supabase = createClient();
-      const today = new Date().toISOString().split('T')[0];
-
-      const { data: allData, error: dataError } = await supabase
-        .from('queue_entries')
-        .select('*')
-        .eq('queue_date', today)
-        .in('status', ['in_service', 'waiting', 'completed', 'skipped', 'cancelled'])
-        .order('queue_number', { ascending: true });
-
-      const { data: servicesData } = await supabase.from('services').select('*');
-
-      if (dataError) {
-        console.error('[fetch] error:', dataError);
-        return;
-      }
-
-      if (allData) {
-        const inServiceEntry = allData.find((e) => e.status === 'in_service') || null;
-        const waitingEntries = allData.filter((e) => e.status === 'waiting');
-        const completedEntries = allData.filter((e) => e.status === 'completed');
-        const skippedEntries = allData.filter((e) => e.status === 'skipped');
-        const cancelledEntries = allData.filter((e) => e.status === 'cancelled');
-
-        setState((prev) => ({
-          ...prev,
-          inService: inServiceEntry,
-          waiting: waitingEntries,
-          completed: completedEntries,
-          skipped: skippedEntries,
-          cancelled: cancelledEntries,
-          services: new Map((servicesData || []).map((s) => [s.id, s])),
-          loading: false,
-        }));
-      }
-    } catch (err) {
-      console.error('[fetchQueueData] error:', err);
+  const refresh = useCallback(async () => {
+    const supabase = createClient();
+    const today = getShopDate();
+    const [{ data, error: queueError }, { data: servicesData }, { data: shopState }] = await Promise.all([
+      supabase.from('queue_entries').select('*').eq('queue_date', today).order('queue_number'),
+      supabase.from('services').select('*'),
+      supabase.from('shop_state').select('accepting_queue').eq('id', true).single(),
+    ]);
+    if (queueError) {
+      setError('Sorry, something went wrong. Please try again.');
+      return;
     }
+    const entries = data || [];
+    setInService(entries.find((entry) => entry.status === 'in_service') || null);
+    setWaiting(entries.filter((entry) => entry.status === 'waiting'));
+    setDone(entries.filter((entry) => entry.status === 'completed'));
+    setSkipped(entries.filter((entry) => entry.status === 'skipped'));
+    setServices(new Map((servicesData || []).map((service) => [service.id, service])));
+    if (shopState) setAcceptingQueue(shopState.accepting_queue);
+    setLoading(false);
   }, []);
 
-  // Subscribe to Realtime updates
-  const subscribeToUpdates = useCallback(() => {
-    try {
-      const supabase = createClient();
-      const today = new Date().toISOString().split('T')[0];
-
-      if (realtimeUnsubscribe.current) {
-        realtimeUnsubscribe.current();
-      }
-
-      const channel = supabase
-        .channel(`queue-${today}`)
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'queue_entries',
-            filter: `queue_date=eq.${today}`,
-          },
-          () => {
-            fetchQueueData();
-          }
-        )
-        .subscribe();
-
-      realtimeUnsubscribe.current = () => {
-        supabase.removeChannel(channel);
-      };
-    } catch (err) {
-      console.error('[realtime] error:', err);
-    }
-  }, [fetchQueueData]);
-
-  // Initialize on mount
   useEffect(() => {
+    const supabase = createClient();
     const init = async () => {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         router.replace('/login');
         return;
       }
-
-      await fetchQueueData();
-      subscribeToUpdates();
+      await refresh();
     };
-
     init();
-
+    const channel = supabase
+      .channel(`dashboard-${getShopDate()}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'queue_entries' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'shop_state' }, refresh)
+      .subscribe();
     return () => {
-      if (realtimeUnsubscribe.current) {
-        realtimeUnsubscribe.current();
-      }
+      supabase.removeChannel(channel);
     };
-  }, [fetchQueueData, subscribeToUpdates, router]);
+  }, [refresh, router]);
 
-  // Action handlers with immediate UI update
-  const handleStartService = async () => {
-    if (state.waiting.length === 0) return;
-
-    const firstWaiting = state.waiting[0];
-    setLoadingActions((prev) => ({ ...prev, [firstWaiting.id]: true }));
+  const run = async (key: string, action: () => Promise<{ success: boolean; error?: string }>) => {
+    if (busy[key]) return;
+    setBusy((current) => ({ ...current, [key]: true }));
     setError(null);
-
     try {
-      const supabase = createClient();
-      const { error: err } = await supabase
-        .from('queue_entries')
-        .update({ status: 'in_service', started_at: new Date().toISOString() })
-        .eq('id', firstWaiting.id);
-
-      if (err) {
-        setError('Failed to start service');
-        console.error('[startService]', err);
-        return;
-      }
-
-      // Immediate UI update
-      setState((prev) => ({
-        ...prev,
-        inService: firstWaiting,
-        waiting: prev.waiting.slice(1),
-      }));
+      const result = await action();
+      if (!result.success) setError(result.error || 'Sorry, something went wrong. Please try again.');
+      await refresh();
+    } catch {
+      setError('Sorry, something went wrong. Please try again.');
     } finally {
-      setLoadingActions((prev) => ({ ...prev, [firstWaiting.id]: false }));
+      setBusy((current) => ({ ...current, [key]: false }));
     }
   };
 
-  const handleCompleteEntry = async () => {
-    if (!state.inService) return;
+  if (loading) return <main className="min-h-screen bg-slate-950 p-6 text-slate-300">Loading...</main>;
 
-    const entryId = state.inService.id;
-    const completedEntry = state.inService;
-    
-    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
-    setError(null);
-
-    try {
-      const result = await completeEntry(entryId);
-
-      if (!result.success) {
-        setError(result.error || 'Failed to complete');
-        return;
-      }
-
-      // Immediate UI update
-      setState((prev) => ({
-        ...prev,
-        inService: (result.promotedEntry as any) || null,
-        completed: [...prev.completed, { ...completedEntry, status: 'completed' as const }],
-      }));
-    } catch (err) {
-      setError('Network error');
-      console.error('[handleCompleteEntry]', err);
-    } finally {
-      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
-    }
-  };
-
-  const handleSkipInService = async () => {
-    if (!state.inService) return;
-
-    const entryId = state.inService.id;
-    const skippedEntry = state.inService;
-    
-    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
-    setError(null);
-
-    try {
-      const result = await skipInService(entryId);
-
-      if (!result.success) {
-        setError(result.error || 'Failed to skip');
-        return;
-      }
-
-      // Immediate UI update
-      setState((prev) => ({
-        ...prev,
-        inService: (result.promotedEntry as any) || null,
-        skipped: [...prev.skipped, { ...skippedEntry, status: 'skipped' as const }],
-      }));
-    } catch (err) {
-      setError('Network error');
-      console.error('[handleSkipInService]', err);
-    } finally {
-      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
-    }
-  };
-
-  const handleSkipWaiting = async (entryId: string) => {
-    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
-    setError(null);
-
-    try {
-      const result = await skipWaiting(entryId);
-
-      if (!result.success) {
-        setError(result.error || 'Failed to skip');
-        return;
-      }
-
-      const skipped = state.waiting.find((e) => e.id === entryId);
-      if (skipped) {
-        setState((prev) => ({
-          ...prev,
-          waiting: prev.waiting.filter((e) => e.id !== entryId),
-          skipped: [...prev.skipped, { ...skipped, status: 'skipped' as const }],
-        }));
-      }
-    } catch (err) {
-      setError('Network error');
-      console.error('[handleSkipWaiting]', err);
-    } finally {
-      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
-    }
-  };
-
-  const handleCancelEntry = async (entryId: string) => {
-    setLoadingActions((prev) => ({ ...prev, [entryId]: true }));
-    setError(null);
-
-    try {
-      const result = await cancelEntry(entryId);
-
-      if (!result.success) {
-        setError(result.error || 'Failed to cancel');
-        return;
-      }
-
-      const cancelled = state.waiting.find((e) => e.id === entryId);
-      if (cancelled) {
-        setState((prev) => ({
-          ...prev,
-          waiting: prev.waiting.filter((e) => e.id !== entryId),
-          cancelled: [...prev.cancelled, { ...cancelled, status: 'cancelled' as const }],
-        }));
-      }
-    } catch (err) {
-      setError('Network error');
-      console.error('[handleCancelEntry]', err);
-    } finally {
-      setLoadingActions((prev) => ({ ...prev, [entryId]: false }));
-    }
-  };
-
-  const handleRequeueSkipped = async (entry: QueueEntry) => {
-    if (!entry.telegram_chat_id || !entry.service_id) return;
-
-    setLoadingActions((prev) => ({ ...prev, [entry.id]: true }));
-    setError(null);
-
-    try {
-      const result = await requeueSkipped(
-        entry.telegram_chat_id,
-        entry.client_name || '',
-        entry.service_id
-      );
-
-      if (!result.success) {
-        setError(result.error || 'Failed to rejoin');
-        return;
-      }
-
-      setState((prev) => ({
-        ...prev,
-        skipped: prev.skipped.filter((e) => e.id !== entry.id),
-      }));
-    } catch (err) {
-      setError('Network error');
-      console.error('[handleRequeueSkipped]', err);
-    } finally {
-      setLoadingActions((prev) => ({ ...prev, [entry.id]: false }));
-    }
-  };
-
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(section)) {
-        next.delete(section);
-      } else {
-        next.add(section);
-      }
-      return next;
-    });
-  };
-
-  const getServiceName = (serviceId: string | null) => {
-    if (!serviceId) return 'Service';
-    return state.services.get(serviceId)?.name || 'Service';
-  };
-
-  const getTime = (dateStr: string | null) => {
-    if (!dateStr) return '—';
-    return new Date(dateStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  if (state.loading) {
-    return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <p className="text-slate-400">Loading...</p>
-      </div>
-    );
-  }
+  const serviceName = (id: string | null) => (id ? services.get(id)?.name || 'Service' : 'Service');
+  const time = (value: string | null) => value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-';
+  const waitingRow = (entry: QueueEntry) => (
+    <div key={entry.id} className="flex items-center justify-between gap-4 border-b border-slate-800 py-4">
+      <div className="flex items-center gap-4"><span className="text-xl font-bold text-blue-300">#{entry.queue_number}</span><div><Identity entry={entry} /><p className="text-xs text-slate-400">{serviceName(entry.service_id)} · Joined {time(entry.joined_at)}</p>{entry.notification_error && <p className="text-xs text-amber-300">Notification failed</p>}</div></div>
+      <div className="flex gap-2"><button disabled={busy[entry.id]} onClick={() => run(entry.id, () => skipWaiting(entry.id))} className="rounded bg-amber-700 px-3 py-2 text-sm">Skip</button><button disabled={busy[entry.id]} onClick={() => run(entry.id, () => cancelEntry(entry.id))} className="rounded bg-red-700 px-3 py-2 text-sm">Cancel</button></div>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100">
-      {/* Header */}
-      <header className="sticky top-0 z-40 bg-slate-800 border-b border-slate-700 px-4 py-4 sm:px-6 sm:py-5">
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-2xl sm:text-3xl font-bold text-white">Mule Barber</h1>
-            <p className="text-xs sm:text-sm text-slate-400">Queue System</p>
-          </div>
-          <button
-            onClick={async () => {
-              await fetch('/api/auth/logout', { method: 'POST' });
-              router.push('/login');
-            }}
-            className="shrink-0 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-100 font-medium rounded-lg transition-colors text-sm"
-          >
-            Sign Out
-          </button>
-        </div>
-      </header>
-
-      {/* Error message */}
-      {error && (
-        <div className="bg-red-500/10 border-b border-red-500/30 text-red-300 px-4 py-3 sm:px-6">
-          <p className="text-sm">{error}</p>
-        </div>
-      )}
-
-      <main className="max-w-2xl mx-auto p-4 sm:p-6 space-y-6">
-        {/* Now Serving Section */}
-        <section className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-          <div className="p-4 sm:p-6">
-            {state.inService ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-xs sm:text-sm text-slate-400 font-semibold uppercase">Now Serving</p>
-                  <p className="text-5xl sm:text-6xl font-bold text-blue-400 mt-2">#{state.inService.queue_number}</p>
-                </div>
-
-                <div className="space-y-2">
-                  <div>
-                    <p className="text-sm text-slate-400">Customer</p>
-                    <p className="text-lg sm:text-xl font-semibold text-white">
-                      {state.inService.client_name || 'Guest'}
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-400">{getServiceName(state.inService.service_id)}</span>
-                    <span className="text-slate-500">
-                      Started: {getTime(state.inService.started_at)}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="flex gap-3 pt-4 border-t border-slate-700">
-                  <button
-                    onClick={handleCompleteEntry}
-                    disabled={loadingActions[state.inService.id]}
-                    className="flex-1 px-4 py-3 sm:py-3 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors text-sm sm:text-base"
-                  >
-                    {loadingActions[state.inService.id] ? '⏳' : '✓ Complete'}
-                  </button>
-                  <button
-                    onClick={handleSkipInService}
-                    disabled={loadingActions[state.inService.id]}
-                    className="flex-1 px-4 py-3 sm:py-3 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors text-sm sm:text-base"
-                  >
-                    {loadingActions[state.inService.id] ? '⏳' : '⊘ No-show'}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="text-center py-8">
-                <p className="text-slate-400 mb-4">No one being served</p>
-                <button
-                  onClick={handleStartService}
-                  disabled={state.waiting.length === 0}
-                  className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-lg transition-colors"
-                >
-                  {state.waiting.length === 0 ? 'Queue Empty' : '▶ Start Service'}
-                </button>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Waiting Section */}
-        <section className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-          <button
-            onClick={() => toggleSection('waiting')}
-            className="w-full px-4 sm:px-6 py-4 flex items-center justify-between hover:bg-slate-700/50 transition-colors border-b border-slate-700"
-          >
-            <div className="text-left">
-              <p className="text-xs sm:text-sm text-slate-400 font-semibold uppercase">Waiting</p>
-              <p className="text-lg sm:text-xl font-bold text-white">{state.waiting.length} in queue</p>
-            </div>
-            <span className={`text-xl transition-transform ${expandedSections.has('waiting') ? 'rotate-180' : ''}`}>
-              ▼
-            </span>
-          </button>
-
-          {expandedSections.has('waiting') && (
-            <div className="divide-y divide-slate-700 max-h-96 overflow-y-auto">
-              {state.waiting.length === 0 ? (
-                <div className="p-4 sm:p-6 text-center text-slate-400">No one waiting</div>
-              ) : (
-                state.waiting.map((entry) => (
-                  <div key={entry.id} className="p-4 sm:p-6 hover:bg-slate-700/50 transition-colors">
-                    <div className="flex items-start gap-4">
-                      <div className="flex-shrink-0 w-10 h-10 bg-slate-700 rounded flex items-center justify-center font-bold text-white">
-                        #{entry.queue_number}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-white text-sm sm:text-base">
-                          {entry.client_name || 'Guest'}
-                        </p>
-                        <p className="text-xs sm:text-sm text-slate-400">
-                          {getServiceName(entry.service_id)}
-                        </p>
-                      </div>
-                      <div className="flex gap-2 flex-shrink-0">
-                        <button
-                          onClick={() => handleSkipWaiting(entry.id)}
-                          disabled={loadingActions[entry.id]}
-                          className="px-2 sm:px-3 py-1 text-xs sm:text-sm bg-amber-600/20 hover:bg-amber-600/40 text-amber-300 rounded transition-colors disabled:opacity-50"
-                        >
-                          Skip
-                        </button>
-                        <button
-                          onClick={() => handleCancelEntry(entry.id)}
-                          disabled={loadingActions[entry.id]}
-                          className="px-2 sm:px-3 py-1 text-xs sm:text-sm bg-red-600/20 hover:bg-red-600/40 text-red-300 rounded transition-colors disabled:opacity-50"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Completed Section */}
-        <section className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-          <button
-            onClick={() => toggleSection('completed')}
-            className="w-full px-4 sm:px-6 py-4 flex items-center justify-between hover:bg-slate-700/50 transition-colors border-b border-slate-700"
-          >
-            <div className="text-left">
-              <p className="text-xs sm:text-sm text-green-400 font-semibold uppercase">Completed</p>
-              <p className="text-lg sm:text-xl font-bold text-white">✓ {state.completed.length}</p>
-            </div>
-            <span className={`text-xl transition-transform ${expandedSections.has('completed') ? 'rotate-180' : ''}`}>
-              ▼
-            </span>
-          </button>
-
-          {expandedSections.has('completed') && (
-            <div className="divide-y divide-slate-700 max-h-96 overflow-y-auto">
-              {state.completed.length === 0 ? (
-                <div className="p-4 sm:p-6 text-center text-slate-400">No completed yet</div>
-              ) : (
-                state.completed.map((entry) => (
-                  <div key={entry.id} className="p-4 sm:p-6 bg-green-500/5">
-                    <div className="flex items-start gap-4">
-                      <div className="flex-shrink-0 w-10 h-10 bg-green-600/20 rounded flex items-center justify-center font-bold text-green-400">
-                        #{entry.queue_number}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-white text-sm sm:text-base">
-                          {entry.client_name || 'Guest'}
-                        </p>
-                        <p className="text-xs sm:text-sm text-slate-400">
-                          {getServiceName(entry.service_id)}
-                        </p>
-                      </div>
-                      <div className="text-right text-xs sm:text-sm text-slate-500 flex-shrink-0">
-                        {getTime(entry.completed_at)}
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Skipped Section */}
-        <section className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-          <button
-            onClick={() => toggleSection('skipped')}
-            className="w-full px-4 sm:px-6 py-4 flex items-center justify-between hover:bg-slate-700/50 transition-colors border-b border-slate-700"
-          >
-            <div className="text-left">
-              <p className="text-xs sm:text-sm text-amber-400 font-semibold uppercase">Skipped (No-show)</p>
-              <p className="text-lg sm:text-xl font-bold text-white">⊘ {state.skipped.length}</p>
-            </div>
-            <span className={`text-xl transition-transform ${expandedSections.has('skipped') ? 'rotate-180' : ''}`}>
-              ▼
-            </span>
-          </button>
-
-          {expandedSections.has('skipped') && (
-            <div className="divide-y divide-slate-700 max-h-96 overflow-y-auto">
-              {state.skipped.length === 0 ? (
-                <div className="p-4 sm:p-6 text-center text-slate-400">No skipped</div>
-              ) : (
-                state.skipped.map((entry) => (
-                  <div key={entry.id} className="p-4 sm:p-6 bg-amber-500/5">
-                    <div className="flex items-start gap-4">
-                      <div className="flex-shrink-0 w-10 h-10 bg-amber-600/20 rounded flex items-center justify-center font-bold text-amber-400">
-                        #{entry.queue_number}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-white text-sm sm:text-base">
-                          {entry.client_name || 'Guest'}
-                        </p>
-                        <p className="text-xs sm:text-sm text-slate-400">
-                          {getServiceName(entry.service_id)}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => handleRequeueSkipped(entry)}
-                        disabled={loadingActions[entry.id]}
-                        className="px-2 sm:px-3 py-1 text-xs sm:text-sm flex-shrink-0 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded transition-colors disabled:opacity-50"
-                      >
-                        {loadingActions[entry.id] ? '...' : 'Rejoin'}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </section>
-
-        {/* Cancelled Section */}
-        <section className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
-          <button
-            onClick={() => toggleSection('cancelled')}
-            className="w-full px-4 sm:px-6 py-4 flex items-center justify-between hover:bg-slate-700/50 transition-colors border-b border-slate-700"
-          >
-            <div className="text-left">
-              <p className="text-xs sm:text-sm text-red-400 font-semibold uppercase">Cancelled</p>
-              <p className="text-lg sm:text-xl font-bold text-white">✕ {state.cancelled.length}</p>
-            </div>
-            <span className={`text-xl transition-transform ${expandedSections.has('cancelled') ? 'rotate-180' : ''}`}>
-              ▼
-            </span>
-          </button>
-
-          {expandedSections.has('cancelled') && (
-            <div className="divide-y divide-slate-700 max-h-96 overflow-y-auto">
-              {state.cancelled.length === 0 ? (
-                <div className="p-4 sm:p-6 text-center text-slate-400">No cancelled</div>
-              ) : (
-                state.cancelled.map((entry) => (
-                  <div key={entry.id} className="p-4 sm:p-6 bg-red-500/5">
-                    <div className="flex items-start gap-4">
-                      <div className="flex-shrink-0 w-10 h-10 bg-red-600/20 rounded flex items-center justify-center font-bold text-red-400">
-                        #{entry.queue_number}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-white text-sm sm:text-base">
-                          {entry.client_name || 'Guest'}
-                        </p>
-                        <p className="text-xs sm:text-sm text-slate-400">
-                          {getServiceName(entry.service_id)}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => handleRequeueSkipped(entry)}
-                        disabled={loadingActions[entry.id]}
-                        className="px-2 sm:px-3 py-1 text-xs sm:text-sm flex-shrink-0 bg-blue-600/20 hover:bg-blue-600/40 text-blue-300 rounded transition-colors disabled:opacity-50"
-                      >
-                        {loadingActions[entry.id] ? '...' : 'Rejoin'}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
-        </section>
-
-        <div className="h-4" />
-      </main>
-    </div>
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900 px-4 py-4"><div className="mx-auto flex max-w-3xl items-center justify-between"><div><h1 className="text-2xl font-bold">Mule Barber</h1><p className="text-sm text-slate-400">Today&apos;s line</p></div><button onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); router.push('/login'); }} className="rounded bg-slate-700 px-3 py-2 text-sm">Sign out</button></div></header>
+      {error && <div className="border-b border-red-900 bg-red-950 px-4 py-3 text-sm text-red-200">{error}</div>}
+      <div className="mx-auto max-w-3xl p-4">
+        <nav className="mb-6 flex gap-2 border-b border-slate-800 pb-2">{([['live', 'Live'], ['done', 'Done today'], ['skipped', 'Skipped today']] as const).map(([value, label]) => <button key={value} onClick={() => setTab(value)} className={`px-3 py-2 text-sm ${tab === value ? 'border-b-2 border-blue-400 text-white' : 'text-slate-400'}`}>{label}</button>)}</nav>
+        {tab === 'live' && <>
+          <section className="mb-6 rounded border border-slate-800 bg-slate-900 p-4"><div className="mb-4 flex items-center justify-between"><div><p className="text-xs uppercase text-slate-400">Queue status</p><p className="font-semibold">{acceptingQueue ? 'Open' : 'Closed'}</p></div><button onClick={() => run('queue-status', async () => { const result = await toggleQueueStatus(); if (result.success && result.acceptingQueue !== undefined) setAcceptingQueue(result.acceptingQueue); return result; })} disabled={busy['queue-status']} className="rounded bg-blue-700 px-3 py-2 text-sm">{acceptingQueue ? 'Close line' : 'Open line'}</button></div>
+            {inService ? <div><p className="mb-2 text-xs uppercase text-slate-400">In service · #{inService.queue_number}</p><Identity entry={inService} /><p className="mt-1 text-sm text-slate-400">{serviceName(inService.service_id)} · Started {time(inService.started_at)}</p><div className="mt-4 flex gap-2"><button disabled={busy[inService.id]} onClick={() => run(inService.id, () => completeEntry(inService.id))} className="rounded bg-green-700 px-4 py-2">Complete</button><button disabled={busy[inService.id]} onClick={() => run(inService.id, () => skipInService(inService.id))} className="rounded bg-amber-700 px-4 py-2">No-show</button></div></div> : <div><p className="mb-3 text-slate-400">No one is in service.</p><button disabled={!waiting.length || busy.start} onClick={() => run('start', startService)} className="rounded bg-blue-700 px-4 py-2">Start Service</button></div>}
+          </section>
+          <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Waiting ({waiting.length})</h2>{waiting.length ? waiting.map(waitingRow) : <p className="py-4 text-slate-400">No one is waiting.</p>}</section>
+        </>}
+        {tab === 'done' && <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Done today</h2>{done.map((entry) => <div key={entry.id} className="border-b border-slate-800 py-4"><Identity entry={entry} /><p className="text-sm text-slate-400">#{entry.queue_number} · {serviceName(entry.service_id)} · Completed {time(entry.completed_at)}</p></div>)}</section>}
+        {tab === 'skipped' && <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Skipped today</h2>{skipped.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-4 border-b border-slate-800 py-4"><div><Identity entry={entry} /><p className="text-sm text-slate-400">#{entry.queue_number} · {serviceName(entry.service_id)} · {time(entry.completed_at)}</p></div><button disabled={busy[entry.id]} onClick={() => run(entry.id, () => requeueEntry(entry.telegram_chat_id, entry.client_name || 'Guest', entry.client_phone, entry.service_id || ''))} className="rounded bg-blue-700 px-3 py-2 text-sm">Requeue</button></div>)}</section>}
+      </div>
+    </main>
   );
 }

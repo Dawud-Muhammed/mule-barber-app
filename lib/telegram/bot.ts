@@ -1,267 +1,174 @@
-/**
- * Telegram bot setup with grammy, handlers, and middleware.
- * No long-running process; driven by webhooks via Next.js API routes.
- */
 import { Bot, webhookCallback } from 'grammy';
 import { BotContext, SessionData } from './context';
+import { checkPosition, getActiveServices, joinQueue } from './queue';
 import {
-  joinQueue,
-  checkPosition,
-  getActiveServices,
-  isQueueOpen,
-} from './queue';
-import {
-  servicesKeyboard,
-  confirmJoinKeyboard,
+  alreadyInLineMessage,
   checkPositionKeyboard,
-  startMessage,
+  confirmJoinKeyboard,
   confirmServiceMessage,
-  alreadyInQueueMessage,
+  genericFailureMessage,
+  joinedMessage,
+  notInLineMessage,
+  positionMessage,
   queueClosedMessage,
-  notInQueueMessage,
-  formatPositionMessage,
-  ServiceDisplay,
+  servicesKeyboard,
+  startMessage,
 } from './keyboards';
 
-// In-memory session store (per chat_id)
 const sessions = new Map<number, SessionData>();
 
-/**
- * Create and configure the bot instance.
- * Returns a bot configured with all handlers but NOT started as a process.
- */
+function resetFlow(session: SessionData) {
+  session.step = undefined;
+  session.selectedServiceId = undefined;
+  session.selectedServiceName = undefined;
+  session.clientName = undefined;
+  session.clientPhone = undefined;
+}
+
+async function showServices(ctx: BotContext) {
+  const services = await getActiveServices();
+  if (services.length === 0) return ctx.reply(genericFailureMessage());
+  ctx.session.step = 'selecting_service';
+  await ctx.reply(startMessage(), { reply_markup: servicesKeyboard(services) });
+}
+
 export function createBot(): Bot<BotContext> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) {
-    throw new Error('TELEGRAM_BOT_TOKEN not set');
-  }
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN not set');
 
   const bot = new Bot<BotContext>(token);
 
-  // ===== Middleware =====
-
-  // Session middleware: load/save session data per chat_id
   bot.use(async (ctx, next) => {
     const chatId = ctx.chat?.id;
-    if (!chatId) {
-      return next();
-    }
-
-    // Load session
-    if (!sessions.has(chatId)) {
-      sessions.set(chatId, {});
-    }
+    if (!chatId) return next();
+    if (!sessions.has(chatId)) sessions.set(chatId, {});
     ctx.session = sessions.get(chatId)!;
-
     await next();
-
-    // Save session back
     sessions.set(chatId, ctx.session);
   });
 
-  // ===== Commands =====
-
   bot.command('start', async (ctx) => {
-    // Query active services fresh each time
-    const services = await getActiveServices();
-
-    if (services.length === 0) {
-      return ctx.reply('Sorry, no services available right now.');
+    const position = await checkPosition(ctx.chat!.id);
+    if (position.success && position.queueNumber !== undefined) {
+      await ctx.reply(alreadyInLineMessage(position.queueNumber, position.countAhead || 0), {
+        reply_markup: checkPositionKeyboard(),
+      });
+      return;
     }
-
-    ctx.session.step = 'selecting_service';
-    ctx.session.selectedServiceId = undefined;
-
-    await ctx.reply(startMessage(), {
-      reply_markup: servicesKeyboard(services),
-    });
+    resetFlow(ctx.session);
+    await showServices(ctx);
   });
 
-  // ===== Callback Queries (Inline Button Presses) =====
-
-  // Service selection callback
   bot.callbackQuery(/^service_/, async (ctx) => {
-    const callbackData = ctx.callbackQuery.data;
-    const serviceId = callbackData.replace('service_', '');
-
-    // Look up service name
-    const services = await getActiveServices();
-    const service = services.find((s) => s.id === serviceId);
-    if (!service) {
-      return ctx.answerCallbackQuery({
-        text: 'Service not found',
-        show_alert: true,
+    const position = await checkPosition(ctx.chat!.id);
+    if (position.success && position.queueNumber !== undefined) {
+      await ctx.editMessageText(alreadyInLineMessage(position.queueNumber, position.countAhead || 0), {
+        reply_markup: checkPositionKeyboard(),
       });
+      await ctx.answerCallbackQuery();
+      return;
     }
 
-    ctx.session.selectedServiceId = serviceId;
-    ctx.session.selectedServiceName = service.name;
-    ctx.session.step = 'confirming_join';
+    const serviceId = ctx.callbackQuery.data.replace('service_', '');
+    const service = (await getActiveServices()).find((item) => item.id === serviceId);
+    if (!service) {
+      await ctx.editMessageText(genericFailureMessage());
+      await ctx.answerCallbackQuery();
+      return;
+    }
 
-    await ctx.editMessageText(confirmServiceMessage(service.name), {
-      reply_markup: confirmJoinKeyboard(),
-    });
+    ctx.session.selectedServiceId = service.id;
+    ctx.session.selectedServiceName = service.name;
+    ctx.session.step = 'awaiting_name';
+    await ctx.editMessageText('What is your name?');
+    await ctx.answerCallbackQuery();
   });
 
-  // Confirm join callback
   bot.callbackQuery('confirm_join', async (ctx) => {
-    const chatId = ctx.chat!.id;
     const serviceId = ctx.session.selectedServiceId;
-    const serviceName = ctx.session.selectedServiceName || 'Service';
-
-    if (!serviceId) {
-      return ctx.answerCallbackQuery({
-        text: 'Error: service not selected',
-        show_alert: true,
-      });
+    const name = ctx.session.clientName;
+    const phone = ctx.session.clientPhone;
+    if (!serviceId || !name || !phone) {
+      await ctx.editMessageText(genericFailureMessage());
+      resetFlow(ctx.session);
+      await ctx.answerCallbackQuery();
+      return;
     }
 
-    // Check if queue is open
-    const open = await isQueueOpen();
-    if (!open) {
-      // Queue closed — show message
-      await ctx.editMessageText(queueClosedMessage(), {
-        reply_markup: undefined,
-      });
-      return ctx.answerCallbackQuery();
-    }
-
-    // Attempt to join
-    const result = await joinQueue(chatId, '', serviceId);
-
+    const result = await joinQueue(ctx.chat!.id, name, phone, serviceId);
     if (!result.success) {
-      // Handle specific errors
-      if (result.errorCode === 'duplicate_entry') {
-        // Already in queue — show their position
-        const posResult = await checkPosition(chatId);
-        if (posResult.success && posResult.queueNumber) {
-          const msg = alreadyInQueueMessage(
-            posResult.queueNumber,
-            posResult.countAhead || 0
-          );
-          await ctx.editMessageText(msg, {
-            reply_markup: checkPositionKeyboard(),
-          });
-        } else {
-          await ctx.editMessageText('You are already in the queue!', {
-            reply_markup: undefined,
-          });
-        }
-      } else if (result.errorCode === 'shop_closed') {
-        // Queue closed
-        await ctx.editMessageText(queueClosedMessage(), {
-          reply_markup: undefined,
-        });
-      } else {
-        // Other error
-        await ctx.editMessageText(
-          'Could not join queue. Please try again later.',
-          {
-            reply_markup: undefined,
-          }
-        );
-      }
-      return ctx.answerCallbackQuery();
+      await ctx.editMessageText(result.errorCode === 'shop_closed' ? queueClosedMessage() : genericFailureMessage());
+      resetFlow(ctx.session);
+      await ctx.answerCallbackQuery();
+      return;
     }
 
-    // Success! Show queue number and count ahead
-    const posMsg = formatPositionMessage(result.queueNumber!, result.countAhead || 0);
-    const confirmMsg = `✅ Joined!\n\n${posMsg}`;
-
-    ctx.session.step = undefined;
-    ctx.session.selectedServiceId = undefined;
-    ctx.session.selectedServiceName = undefined;
-
-    await ctx.editMessageText(confirmMsg, {
+    resetFlow(ctx.session);
+    await ctx.editMessageText(joinedMessage(result.queueNumber!, result.countAhead || 0), {
       reply_markup: checkPositionKeyboard(),
     });
-
-    await ctx.answerCallbackQuery({
-      text: 'You have joined the queue!',
-    });
+    await ctx.answerCallbackQuery();
   });
 
-  // Cancel join callback
   bot.callbackQuery('cancel', async (ctx) => {
-    ctx.session.step = undefined;
-    ctx.session.selectedServiceId = undefined;
-    ctx.session.selectedServiceName = undefined;
-
-    const services = await getActiveServices();
-    if (services.length === 0) {
-      await ctx.editMessageText('No services available.');
-    } else {
-      await ctx.editMessageText(startMessage(), {
-        reply_markup: servicesKeyboard(services),
-      });
-    }
-
+    resetFlow(ctx.session);
+    await ctx.editMessageText(startMessage(), { reply_markup: servicesKeyboard(await getActiveServices()) });
     await ctx.answerCallbackQuery();
   });
 
-  // Check position callback
   bot.callbackQuery('check_position', async (ctx) => {
-    const chatId = ctx.chat!.id;
-    const result = await checkPosition(chatId);
-
-    if (!result.success || !result.queueNumber) {
-      await ctx.editMessageText(notInQueueMessage(), {
-        reply_markup: undefined,
-      });
+    const result = await checkPosition(ctx.chat!.id);
+    if (!result.success || result.queueNumber === undefined) {
+      await ctx.editMessageText(notInLineMessage());
     } else {
-      const posMsg = formatPositionMessage(
-        result.queueNumber,
-        result.countAhead || 0
-      );
-      await ctx.editMessageText(posMsg, {
+      await ctx.editMessageText(positionMessage(result.queueNumber, result.countAhead || 0), {
         reply_markup: checkPositionKeyboard(),
       });
     }
-
     await ctx.answerCallbackQuery();
   });
 
-  // ===== Text Messages (Catch-All) =====
-
-  // Any text input when in queue → show position
-  // Any text input when not in queue → re-show service menu
   bot.on('message:text', async (ctx) => {
-    const chatId = ctx.chat.id;
-
-    // Check if they have an active entry
-    const posResult = await checkPosition(chatId);
-
-    if (posResult.success && posResult.queueNumber) {
-      // In queue — show position
-      const posMsg = formatPositionMessage(
-        posResult.queueNumber,
-        posResult.countAhead || 0
-      );
-      await ctx.reply(posMsg, {
+    const position = await checkPosition(ctx.chat.id);
+    if (position.success && position.queueNumber !== undefined) {
+      await ctx.reply(positionMessage(position.queueNumber, position.countAhead || 0), {
         reply_markup: checkPositionKeyboard(),
       });
-    } else {
-      // Not in queue — show service menu
-      const services = await getActiveServices();
-      if (services.length === 0) {
-        await ctx.reply('Sorry, no services available right now.');
-      } else {
-        ctx.session.step = 'selecting_service';
-        await ctx.reply(startMessage(), {
-          reply_markup: servicesKeyboard(services),
-        });
-      }
+      return;
     }
+
+    if (ctx.session.step === 'awaiting_name') {
+      const name = ctx.message.text.trim();
+      if (name.length < 2) {
+        await ctx.reply('Please type your real name.');
+        return;
+      }
+      ctx.session.clientName = name;
+      ctx.session.step = 'awaiting_phone';
+      await ctx.reply('What is your phone number?');
+      return;
+    }
+
+    if (ctx.session.step === 'awaiting_phone') {
+      const phone = ctx.message.text.replace(/\D/g, '');
+      if (phone.length < 10) {
+        await ctx.reply('Please type a valid phone number, for example 0912345678.');
+        return;
+      }
+      ctx.session.clientPhone = phone;
+      ctx.session.step = 'confirming_join';
+      await ctx.reply(confirmServiceMessage(ctx.session.clientName!, ctx.session.selectedServiceName!), {
+        reply_markup: confirmJoinKeyboard(),
+      });
+      return;
+    }
+
+    await showServices(ctx);
   });
 
   return bot;
 }
 
-/**
- * Create the webhookCallback handler for Next.js route handlers.
- * Returns an Express-like (req, res) handler that processes Telegram updates.
- */
 export function getWebhookCallback() {
-  const bot = createBot();
-  return webhookCallback(bot, 'std/http');
+  return webhookCallback(createBot(), 'std/http');
 }

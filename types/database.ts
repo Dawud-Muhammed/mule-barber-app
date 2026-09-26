@@ -24,10 +24,16 @@ export type Database = {
           queue_date: string
           telegram_chat_id: number
           client_name: string | null
+          client_phone: string | null
           service_id: string | null
           status: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled'
           notified_close: boolean
           notified_next: boolean
+          notification_error: string | null
+          notified_promoted: boolean
+          notified_terminal: boolean
+          notified_cancelled: boolean
+          notified_skipped: boolean
           joined_at: string
           started_at: string | null
           completed_at: string | null
@@ -38,10 +44,16 @@ export type Database = {
           queue_date?: string
           telegram_chat_id: number
           client_name?: string | null
+          client_phone?: string | null
           service_id?: string | null
           status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled'
           notified_close?: boolean
           notified_next?: boolean
+          notification_error?: string | null
+          notified_promoted?: boolean
+          notified_terminal?: boolean
+          notified_cancelled?: boolean
+          notified_skipped?: boolean
           joined_at?: string
           started_at?: string | null
           completed_at?: string | null
@@ -52,10 +64,16 @@ export type Database = {
           queue_date?: string
           telegram_chat_id?: number
           client_name?: string | null
+          client_phone?: string | null
           service_id?: string | null
           status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled'
           notified_close?: boolean
           notified_next?: boolean
+          notification_error?: string | null
+          notified_promoted?: boolean
+          notified_terminal?: boolean
+          notified_cancelled?: boolean
+          notified_skipped?: boolean
           joined_at?: string
           started_at?: string | null
           completed_at?: string | null
@@ -107,26 +125,37 @@ export type Database = {
         Relationships: []
       }
     }
-    Views: {}
+    Views: Record<string, never>
     Functions: {
       assign_queue_number: {
         Args: {
+          p_queue_date: string
           p_telegram_chat_id: number
           p_client_name: string
+          p_client_phone: string
           p_service_id: string
         }
         Returns: Json
       }
+      start_service: {
+        Args: { p_queue_date: string }
+        Returns: Json
+      }
       advance_queue: {
         Args: {
-          p_action: string
-          p_entry_id: string
+          p_queue_date: string
+          p_current_entry_id: string
+          p_new_status: string
         }
         Returns: Json
       }
+      toggle_accepting_queue: {
+        Args: Record<string, never>
+        Returns: Json
+      }
     }
-    Enums: {}
-    CompositeTypes: {}
+    Enums: Record<string, never>
+    CompositeTypes: Record<string, never>
   }
 }
 

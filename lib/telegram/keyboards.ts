@@ -1,6 +1,3 @@
-/**
- * Telegram inline keyboards and message builders.
- */
 import { InlineKeyboardMarkup } from 'grammy/types';
 
 export type ServiceDisplay = {
@@ -10,92 +7,51 @@ export type ServiceDisplay = {
   sort_order: number;
 };
 
-/**
- * Build inline keyboard for service selection.
- * Each service is a button that calls a callback query with data "service_<serviceId>".
- */
 export function servicesKeyboard(services: ServiceDisplay[]): InlineKeyboardMarkup {
   return {
-    inline_keyboard: services.map((service) => [
-      {
-        text: service.name,
-        callback_data: `service_${service.id}`,
-      },
-    ]),
+    inline_keyboard: services.map((service) => [{ text: service.name, callback_data: `service_${service.id}` }]),
   };
 }
 
-/**
- * Build keyboard for confirming queue join (after service selected).
- */
 export function confirmJoinKeyboard(): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [
-      [
-        { text: '✓ Join Queue', callback_data: 'confirm_join' },
-        { text: '✗ Cancel', callback_data: 'cancel' },
-      ],
-    ],
+    inline_keyboard: [[{ text: 'Join', callback_data: 'confirm_join' }, { text: 'Cancel', callback_data: 'cancel' }]],
   };
 }
 
-/**
- * Build keyboard for checking position when in queue.
- */
 export function checkPositionKeyboard(): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [{ text: '📍 Check my position', callback_data: 'check_position' }],
-    ],
-  };
+  return { inline_keyboard: [[{ text: 'Check position', callback_data: 'check_position' }]] };
 }
 
-/**
- * Format the queue position message.
- * Example: "Queue #8 — 7 ahead"
- */
-export function formatPositionMessage(queueNumber: number, countAhead: number): string {
-  if (countAhead === 0) {
-    return `🎯 Queue #${queueNumber} — You're next!`;
-  }
-  const plural = countAhead === 1 ? 'person' : 'people';
-  return `📋 Queue #${queueNumber} — ${countAhead} ${plural} ahead`;
+export function joinedMessage(queueNumber: number, countAhead: number): string {
+  if (countAhead === 0) return 'You are next in line. Please stay close.';
+  return `You are number ${queueNumber} in line. ${countAhead} people are ahead of you. We will message you when your turn is near.`;
 }
 
-/**
- * Format a friendly "not in queue" message.
- */
-export function notInQueueMessage(): string {
-  return "You're not currently in the queue. Use /start to join!";
+export function positionMessage(queueNumber: number, countAhead: number): string {
+  return `You are number ${queueNumber} in line. ${countAhead} people are ahead of you.`;
 }
 
-/**
- * Format a friendly "queue closed" message.
- */
+export function notInLineMessage(): string {
+  return 'You are not in line today. Want to join?';
+}
+
 export function queueClosedMessage(): string {
-  return "We're not taking walk-ins right now. Check back later!";
+  return 'We are not taking new customers right now. Please try again later.';
 }
 
-/**
- * Format duplicate entry response (already in queue).
- * Shows their existing position.
- */
-export function alreadyInQueueMessage(queueNumber: number, countAhead: number): string {
-  const posMsg = formatPositionMessage(queueNumber, countAhead);
-  return `You're already in the queue!\n\n${posMsg}`;
+export function alreadyInLineMessage(queueNumber: number, countAhead: number): string {
+  return `You are already in line - number ${queueNumber}. ${countAhead} people are ahead of you.`;
 }
 
-/**
- * Format the initial /start message with instructions.
- */
 export function startMessage(): string {
-  return `🏳️ Welcome to Mule Barber!\n\nSelect a service to join the queue:`;
+  return 'You are not in line today. Want to join?';
 }
 
-/**
- * Format the service confirmation message.
- * Example: "Ready to join for Haircut + Beard?"
- */
-export function confirmServiceMessage(serviceName: string): string {
-  return `Ready to join for ${serviceName}?\n\nConfirm to get your queue number!`;
+export function confirmServiceMessage(name: string, service: string): string {
+  return `${name} - ${service}. Join the line?`;
+}
+
+export function genericFailureMessage(): string {
+  return 'Sorry, something went wrong. Please try again.';
 }

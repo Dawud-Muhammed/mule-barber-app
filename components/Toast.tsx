@@ -43,11 +43,10 @@ export function removeToast(id: string) {
 }
 
 export function useToasts() {
-  const [displayToasts, setDisplayToasts] = useState<Toast[]>([]);
+  const [displayToasts, setDisplayToasts] = useState<Toast[]>(() => [...toasts]);
 
   useEffect(() => {
     listeners.push(setDisplayToasts);
-    setDisplayToasts([...toasts]);
 
     return () => {
       listeners = listeners.filter((l) => l !== setDisplayToasts);
