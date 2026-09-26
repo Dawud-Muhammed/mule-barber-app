@@ -1,22 +1,41 @@
 import { createAdminClient } from '@/lib/supabase/admin';
 import { getShopDate } from '@/lib/shopDate';
-import { sendTelegramMessage, type NotificationType } from '@/lib/notifications';
+import { sendTelegramMessage } from '@/lib/notifications';
+import { Language, MessageKey, t } from '@/lib/telegram/messages';
 import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
+type NotificationFlag =
+  | 'notified_promoted'
+  | 'notified_pos_1'
+  | 'notified_pos_2'
+  | 'notified_pos_3'
+  | 'notified_terminal'
+  | 'notified_cancelled'
+  | 'notified_skipped'
+  | 'notified_completed';
 
 type NotificationTarget = {
   entry: QueueEntry;
-  type: NotificationType;
-  flag: 'notified_promoted' | 'notified_pos_1' | 'notified_pos_2' | 'notified_pos_3' | 'notified_terminal' | 'notified_cancelled' | 'notified_skipped' | 'notified_completed';
+  key: MessageKey;
+  flag: NotificationFlag;
 };
 
 function targetForPosition(entry: QueueEntry, position: number): NotificationTarget | null {
-  if (position === 1) return { entry, type: 'pos_1', flag: 'notified_pos_1' };
-  if (position === 2) return { entry, type: 'pos_2', flag: 'notified_pos_2' };
-  if (position === 3) return { entry, type: 'pos_3', flag: 'notified_pos_3' };
-  if (position === 4) return { entry, type: 'terminal', flag: 'notified_terminal' };
+  if (position === 1) return { entry, key: 'you_are_next', flag: 'notified_pos_1' };
+  if (position === 2) return { entry, key: 'ahead_1', flag: 'notified_pos_2' };
+  if (position === 3) return { entry, key: 'ahead_2', flag: 'notified_pos_3' };
+  if (position === 4) return { entry, key: 'ahead_3', flag: 'notified_terminal' };
   return null;
+}
+
+async function getLanguage(chatId: number): Promise<Language> {
+  const { data } = await createAdminClient()
+    .from('bot_users')
+    .select('language')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+  return (data?.language as Language | undefined) || 'en';
 }
 
 async function claimAndSend(target: NotificationTarget): Promise<void> {
@@ -31,7 +50,8 @@ async function claimAndSend(target: NotificationTarget): Promise<void> {
 
   if (claimError || !claimed) return;
 
-  const result = await sendTelegramMessage(target.entry.telegram_chat_id, target.type);
+  const language = await getLanguage(target.entry.telegram_chat_id);
+  const result = await sendTelegramMessage(target.entry.telegram_chat_id, t(language, target.key));
   if (result.success) return;
 
   await admin
@@ -56,7 +76,7 @@ export async function notifyQueueStateChange(): Promise<void> {
   const inService = entries.find((entry) => entry.status === 'in_service');
 
   if (inService) {
-    await claimAndSend({ entry: inService, type: 'promoted', flag: 'notified_promoted' });
+    await claimAndSend({ entry: inService, key: 'promoted', flag: 'notified_promoted' });
   }
 
   const waiting = entries.filter((entry) => entry.status === 'waiting');
@@ -67,8 +87,7 @@ export async function notifyQueueStateChange(): Promise<void> {
 }
 
 export async function hasNotificationError(entryId: string): Promise<boolean> {
-  const admin = createAdminClient();
-  const { data } = await admin
+  const { data } = await createAdminClient()
     .from('queue_entries')
     .select('notification_error')
     .eq('id', entryId)
@@ -81,11 +100,16 @@ export async function notifyTerminalEntry(
   type: 'cancelled' | 'skipped' | 'completed'
 ): Promise<void> {
   const admin = createAdminClient();
-  const flag = type === 'cancelled'
+  const flag: NotificationFlag = type === 'cancelled'
     ? 'notified_cancelled'
     : type === 'skipped'
       ? 'notified_skipped'
       : 'notified_completed';
+  const key: MessageKey = type === 'cancelled'
+    ? 'cancelled_by_owner'
+    : type === 'skipped'
+      ? 'skipped_no_show'
+      : 'completed';
   const { data: entry } = await admin
     .from('queue_entries')
     .select('telegram_chat_id')
@@ -102,7 +126,8 @@ export async function notifyTerminalEntry(
     .maybeSingle();
   if (!claimed) return;
 
-  const result = await sendTelegramMessage(entry.telegram_chat_id, type);
+  const language = await getLanguage(entry.telegram_chat_id);
+  const result = await sendTelegramMessage(entry.telegram_chat_id, t(language, key));
   if (result.success) return;
   await admin
     .from('queue_entries')

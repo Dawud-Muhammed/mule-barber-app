@@ -7,6 +7,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { notifyQueueStateChange } from '@/lib/notificationRules';
 import { getShopDate } from '@/lib/shopDate';
 import type { QueueEntryRow } from './context';
+import type { Language } from './messages';
 
 interface JoinQueueResult {
   success: boolean;
@@ -25,6 +26,24 @@ interface PositionResult {
   countAhead?: number;
   status?: string;
   error?: string;
+}
+
+export async function getBotLanguage(chatId: number): Promise<Language | null> {
+  const { data, error } = await createAdminClient()
+    .from('bot_users')
+    .select('language')
+    .eq('telegram_chat_id', chatId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data.language as Language;
+}
+
+export async function saveBotLanguage(chatId: number, language: Language): Promise<boolean> {
+  const { error } = await createAdminClient()
+    .from('bot_users')
+    .upsert({ telegram_chat_id: chatId, language }, { onConflict: 'telegram_chat_id' });
+  return !error;
 }
 
 /**
@@ -180,7 +199,7 @@ export async function getActiveServices() {
 
     const { data, error } = await admin
       .from('services')
-      .select('id, name, is_active, sort_order')
+      .select('id, name, name_am, is_active, sort_order')
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 
@@ -192,6 +211,7 @@ export async function getActiveServices() {
     return (data || []) as Array<{
       id: string;
       name: string;
+      name_am: string | null;
       is_active: boolean;
       sort_order: number;
     }>;

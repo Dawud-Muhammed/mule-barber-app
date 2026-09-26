@@ -95,20 +95,41 @@ export type Database = {
         Row: {
           id: string
           name: string
+          name_am: string | null
           is_active: boolean
           sort_order: number
         }
         Insert: {
           id?: string
           name: string
+          name_am?: string | null
           is_active?: boolean
           sort_order?: number
         }
         Update: {
           id?: string
           name?: string
+          name_am?: string | null
           is_active?: boolean
           sort_order?: number
+        }
+        Relationships: []
+      }
+      bot_users: {
+        Row: {
+          telegram_chat_id: number
+          language: 'am' | 'en'
+          created_at: string
+        }
+        Insert: {
+          telegram_chat_id: number
+          language: 'am' | 'en'
+          created_at?: string
+        }
+        Update: {
+          telegram_chat_id?: number
+          language?: 'am' | 'en'
+          created_at?: string
         }
         Relationships: []
       }

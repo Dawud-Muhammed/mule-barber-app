@@ -3,6 +3,7 @@
  */
 import { Context } from 'grammy';
 import { Database } from '@/types/database';
+import { Language } from './messages';
 
 export type QueueEntryRow = Database['public']['Tables']['queue_entries']['Row'];
 export type ServiceRow = Database['public']['Tables']['services']['Row'];
@@ -12,6 +13,7 @@ export type ServiceRow = Database['public']['Tables']['services']['Row'];
  * Persisted in-memory for this MVP; can migrate to Supabase table later.
  */
 export interface SessionData {
+  language?: Language;
   // Current flow state
   step?: 'selecting_service' | 'awaiting_name' | 'awaiting_phone' | 'confirming_join';
   selectedServiceId?: string;

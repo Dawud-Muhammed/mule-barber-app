@@ -1,57 +1,83 @@
 import { InlineKeyboardMarkup } from 'grammy/types';
+import { Language, MessageKey, t } from './messages';
 
 export type ServiceDisplay = {
   id: string;
   name: string;
+  name_am: string | null;
   is_active: boolean;
   sort_order: number;
 };
 
-export function servicesKeyboard(services: ServiceDisplay[]): InlineKeyboardMarkup {
+export function languageKeyboard(): InlineKeyboardMarkup {
   return {
-    inline_keyboard: services.map((service) => [{ text: service.name, callback_data: `service_${service.id}` }]),
+    inline_keyboard: [[
+      { text: t('am', 'btn_amharic'), callback_data: 'language_am' },
+      { text: t('en', 'btn_english'), callback_data: 'language_en' },
+    ]],
   };
 }
 
-export function confirmJoinKeyboard(): InlineKeyboardMarkup {
+export function servicesKeyboard(services: ServiceDisplay[], language: Language): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [[{ text: 'Join', callback_data: 'confirm_join' }, { text: 'Cancel', callback_data: 'cancel' }]],
+    inline_keyboard: [
+      ...services.map((service) => [{
+        text: language === 'am' ? service.name_am || service.name : service.name,
+        callback_data: `service_${service.id}`,
+      }]),
+      [{ text: t(language, 'btn_language'), callback_data: 'language_switch' }],
+    ],
   };
 }
 
-export function checkPositionKeyboard(): InlineKeyboardMarkup {
-  return { inline_keyboard: [[{ text: 'Check position', callback_data: 'check_position' }]] };
+export function confirmJoinKeyboard(language: Language): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[
+      { text: t(language, 'btn_join'), callback_data: 'confirm_join' },
+      { text: t(language, 'btn_cancel'), callback_data: 'cancel' },
+    ]],
+  };
 }
 
-export function joinedMessage(queueNumber: number, countAhead: number): string {
-  if (countAhead === 0) return 'You are next in line. Please stay close.';
-  return `You are number ${queueNumber} in line. ${countAhead} people are ahead of you. We will message you when your turn is near.`;
+export function checkPositionKeyboard(language: Language): InlineKeyboardMarkup {
+  return { inline_keyboard: [[{ text: t(language, 'btn_my_position'), callback_data: 'check_position' }]] };
 }
 
-export function positionMessage(queueNumber: number, countAhead: number): string {
-  return `You are number ${queueNumber} in line. ${countAhead} people are ahead of you.`;
+export function messageWithPosition(
+  language: Language,
+  key: MessageKey,
+  queueNumber: number,
+  countAhead: number
+): string {
+  return t(language, key, { n: queueNumber, a: countAhead });
 }
 
-export function notInLineMessage(): string {
-  return 'You are not in line today. Want to join?';
+export function joinedMessage(language: Language, queueNumber: number, countAhead: number): string {
+  return countAhead === 0
+    ? t(language, 'joined_next')
+    : t(language, 'joined', { n: queueNumber, a: countAhead });
 }
 
-export function queueClosedMessage(): string {
-  return 'We are not taking new customers right now. Please try again later.';
+export function positionMessage(language: Language, queueNumber: number, countAhead: number): string {
+  return t(language, 'position_check', { n: queueNumber, a: countAhead });
 }
 
-export function alreadyInLineMessage(queueNumber: number, countAhead: number): string {
-  return `You are already in line - number ${queueNumber}. ${countAhead} people are ahead of you.`;
+export function notInLineMessage(language: Language): string {
+  return t(language, 'not_in_line');
 }
 
-export function startMessage(): string {
-  return 'You are not in line today. Want to join?';
+export function queueClosedMessage(language: Language): string {
+  return t(language, 'queue_closed');
 }
 
-export function confirmServiceMessage(name: string, service: string): string {
-  return `${name} - ${service}. Join the line?`;
+export function alreadyInLineMessage(language: Language, queueNumber: number, countAhead: number): string {
+  return t(language, 'already_in_line', { n: queueNumber, a: countAhead });
 }
 
-export function genericFailureMessage(): string {
-  return 'Sorry, something went wrong. Please try again.';
+export function confirmServiceMessage(language: Language, name: string, service: string): string {
+  return t(language, 'confirm_join', { name, service });
+}
+
+export function genericFailureMessage(language: Language): string {
+  return t(language, 'generic_error');
 }
