@@ -7,6 +7,7 @@ import { getShopDate } from '@/lib/shopDate';
 import {
   cancelEntry,
   completeEntry,
+  markLost,
   requeueEntry,
   skipInService,
   skipWaiting,
@@ -17,7 +18,7 @@ import type { Database } from '@/types/database';
 
 type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
 type Service = Database['public']['Tables']['services']['Row'];
-type Tab = 'live' | 'done' | 'skipped';
+type Tab = 'live' | 'done' | 'skipped' | 'lost';
 
 function Identity({ entry }: { entry: QueueEntry }) {
   return (
@@ -39,6 +40,7 @@ export default function DashboardPage() {
   const [waiting, setWaiting] = useState<QueueEntry[]>([]);
   const [done, setDone] = useState<QueueEntry[]>([]);
   const [skipped, setSkipped] = useState<QueueEntry[]>([]);
+  const [lost, setLost] = useState<QueueEntry[]>([]);
   const [services, setServices] = useState<Map<string, Service>>(new Map());
   const [acceptingQueue, setAcceptingQueue] = useState(true);
   const [loading, setLoading] = useState(true);
@@ -62,6 +64,7 @@ export default function DashboardPage() {
     setWaiting(entries.filter((entry) => entry.status === 'waiting'));
     setDone(entries.filter((entry) => entry.status === 'completed'));
     setSkipped(entries.filter((entry) => entry.status === 'skipped'));
+    setLost(entries.filter((entry) => entry.status === 'lost'));
     setServices(new Map((servicesData || []).map((service) => [service.id, service])));
     if (shopState) setAcceptingQueue(shopState.accepting_queue);
     setLoading(false);
@@ -119,7 +122,7 @@ export default function DashboardPage() {
       <header className="border-b border-slate-800 bg-slate-900 px-4 py-4"><div className="mx-auto flex max-w-3xl items-center justify-between"><div><h1 className="text-2xl font-bold">Mule Barber</h1><p className="text-sm text-slate-400">Today&apos;s line</p></div><button onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); router.push('/login'); }} className="rounded bg-slate-700 px-3 py-2 text-sm">Sign out</button></div></header>
       {error && <div className="border-b border-red-900 bg-red-950 px-4 py-3 text-sm text-red-200">{error}</div>}
       <div className="mx-auto max-w-3xl p-4">
-        <nav className="mb-6 flex gap-2 border-b border-slate-800 pb-2">{([['live', 'Live'], ['done', 'Done today'], ['skipped', 'Skipped today']] as const).map(([value, label]) => <button key={value} onClick={() => setTab(value)} className={`px-3 py-2 text-sm ${tab === value ? 'border-b-2 border-blue-400 text-white' : 'text-slate-400'}`}>{label}</button>)}</nav>
+        <nav className="mb-6 flex gap-2 border-b border-slate-800 pb-2">{([['live', 'Live'], ['done', 'Done today'], ['skipped', 'Skipped today'], ['lost', 'Lost']] as const).map(([value, label]) => <button key={value} onClick={() => setTab(value)} className={`px-3 py-2 text-sm ${tab === value ? 'border-b-2 border-blue-400 text-white' : 'text-slate-400'}`}>{label}</button>)}</nav>
         {tab === 'live' && <>
           <section className="mb-6 rounded border border-slate-800 bg-slate-900 p-4"><div className="mb-4 flex items-center justify-between"><div><p className="text-xs uppercase text-slate-400">Queue status</p><p className="font-semibold">{acceptingQueue ? 'Open' : 'Closed'}</p></div><button onClick={() => run('queue-status', async () => { const result = await toggleQueueStatus(); if (result.success && result.acceptingQueue !== undefined) setAcceptingQueue(result.acceptingQueue); return result; })} disabled={busy['queue-status']} className="rounded bg-blue-700 px-3 py-2 text-sm">{acceptingQueue ? 'Close line' : 'Open line'}</button></div>
             {inService ? <div><p className="mb-2 text-xs uppercase text-slate-400">In service · #{inService.queue_number}</p><Identity entry={inService} /><p className="mt-1 text-sm text-slate-400">{serviceName(inService.service_id)} · Started {time(inService.started_at)}</p><div className="mt-4 flex gap-2"><button disabled={busy[inService.id]} onClick={() => run(inService.id, () => completeEntry(inService.id))} className="rounded bg-green-700 px-4 py-2">Complete</button><button disabled={busy[inService.id]} onClick={() => run(inService.id, () => skipInService(inService.id))} className="rounded bg-amber-700 px-4 py-2">No-show</button></div></div> : <div><p className="mb-3 text-slate-400">No one is in service.</p><button disabled={!waiting.length || busy.start} onClick={() => run('start', startService)} className="rounded bg-blue-700 px-4 py-2">Start Service</button></div>}
@@ -127,7 +130,8 @@ export default function DashboardPage() {
           <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Waiting ({waiting.length})</h2>{waiting.length ? waiting.map(waitingRow) : <p className="py-4 text-slate-400">No one is waiting.</p>}</section>
         </>}
         {tab === 'done' && <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Done today</h2>{done.map((entry) => <div key={entry.id} className="border-b border-slate-800 py-4"><Identity entry={entry} /><p className="text-sm text-slate-400">#{entry.queue_number} · {serviceName(entry.service_id)} · Completed {time(entry.completed_at)}</p></div>)}</section>}
-        {tab === 'skipped' && <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Skipped today</h2>{skipped.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-4 border-b border-slate-800 py-4"><div><Identity entry={entry} /><p className="text-sm text-slate-400">#{entry.queue_number} · {serviceName(entry.service_id)} · {time(entry.completed_at)}</p></div><button disabled={busy[entry.id]} onClick={() => run(entry.id, () => requeueEntry(entry.telegram_chat_id, entry.client_name || 'Guest', entry.client_phone, entry.service_id || ''))} className="rounded bg-blue-700 px-3 py-2 text-sm">Requeue</button></div>)}</section>}
+        {tab === 'skipped' && <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Skipped today</h2>{skipped.map((entry) => <div key={entry.id} className="flex items-center justify-between gap-4 border-b border-slate-800 py-4"><div><Identity entry={entry} /><p className="text-sm text-slate-400">#{entry.queue_number} · {serviceName(entry.service_id)} · {time(entry.completed_at)}</p></div><div className="flex gap-2"><button disabled={busy[entry.id]} onClick={() => run(entry.id, () => requeueEntry(entry.id))} className="rounded bg-blue-700 px-3 py-2 text-sm">Requeue</button><button disabled={busy[entry.id]} onClick={() => run(`${entry.id}-lost`, () => markLost(entry.id))} className="rounded bg-red-700 px-3 py-2 text-sm">Lost</button></div></div>)}</section>}
+        {tab === 'lost' && <section className="rounded border border-slate-800 bg-slate-900 p-4"><h2 className="mb-2 text-lg font-semibold">Lost customers</h2>{lost.length ? lost.map((entry) => <div key={entry.id} className="border-b border-slate-800 py-4"><Identity entry={entry} /><p className="text-sm text-slate-400">#{entry.queue_number} · {serviceName(entry.service_id)} · {time(entry.completed_at)}</p></div>) : <p className="py-4 text-slate-400">No lost customers today.</p>}</section>}
       </div>
     </main>
   );

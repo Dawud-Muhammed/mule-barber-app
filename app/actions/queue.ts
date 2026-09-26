@@ -101,28 +101,42 @@ export async function cancelEntry(entryId: string): Promise<QueueActionResult> {
   return updateWaitingEntry(entryId, 'cancelled');
 }
 
-export async function requeueEntry(
-  chatId: number,
-  clientName: string,
-  clientPhone: string | null,
-  serviceId: string
-): Promise<QueueActionResult> {
+export async function requeueEntry(entryId: string): Promise<QueueActionResult> {
   try {
-    const { data, error } = await createAdminClient().rpc('assign_queue_number', {
+    const { data, error } = await createAdminClient().rpc('requeue_entry', {
       p_queue_date: getShopDate(),
-      p_telegram_chat_id: chatId,
-      p_client_name: clientName,
-      p_client_phone: clientPhone || '',
-      p_service_id: serviceId,
+      p_entry_id: entryId,
     });
     if (error) {
       console.error('[requeue]', error);
       return { success: false, error: 'Generic failure' };
     }
+    if (!data) return { success: false, error: 'Generic failure' };
     await notifyAfterChange();
     return { success: true, promotedEntry: data as unknown as QueueEntry };
   } catch (error) {
     console.error('[requeue]', error);
+    return { success: false, error: 'Generic failure' };
+  }
+}
+
+export async function markLost(entryId: string): Promise<QueueActionResult> {
+  try {
+    const { data, error } = await createAdminClient()
+      .from('queue_entries')
+      .update({ status: 'lost' })
+      .eq('id', entryId)
+      .eq('queue_date', getShopDate())
+      .eq('status', 'skipped')
+      .select('id')
+      .maybeSingle();
+    if (error) {
+      console.error('[mark lost]', error);
+      return { success: false, error: 'Generic failure' };
+    }
+    return data ? { success: true, promotedEntry: null } : { success: false, error: 'Generic failure' };
+  } catch (error) {
+    console.error('[mark lost]', error);
     return { success: false, error: 'Generic failure' };
   }
 }

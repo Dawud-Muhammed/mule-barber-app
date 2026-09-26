@@ -26,7 +26,7 @@ export type Database = {
           client_name: string | null
           client_phone: string | null
           service_id: string | null
-          status: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled'
+          status: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled' | 'requeued' | 'lost'
           notified_close: boolean
           notified_next: boolean
           notification_error: string | null
@@ -47,7 +47,7 @@ export type Database = {
           client_name?: string | null
           client_phone?: string | null
           service_id?: string | null
-          status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled'
+          status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled' | 'requeued' | 'lost'
           notified_close?: boolean
           notified_next?: boolean
           notification_error?: string | null
@@ -68,7 +68,7 @@ export type Database = {
           client_name?: string | null
           client_phone?: string | null
           service_id?: string | null
-          status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled'
+          status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled' | 'requeued' | 'lost'
           notified_close?: boolean
           notified_next?: boolean
           notification_error?: string | null
@@ -175,6 +175,13 @@ export type Database = {
       }
       toggle_accepting_queue: {
         Args: Record<string, never>
+        Returns: Json
+      }
+      requeue_entry: {
+        Args: {
+          p_queue_date: string
+          p_entry_id: string
+        }
         Returns: Json
       }
     }
