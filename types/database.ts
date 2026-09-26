@@ -34,6 +34,7 @@ export type Database = {
           notified_terminal: boolean
           notified_cancelled: boolean
           notified_skipped: boolean
+          notified_completed: boolean
           joined_at: string
           started_at: string | null
           completed_at: string | null
@@ -54,6 +55,7 @@ export type Database = {
           notified_terminal?: boolean
           notified_cancelled?: boolean
           notified_skipped?: boolean
+          notified_completed?: boolean
           joined_at?: string
           started_at?: string | null
           completed_at?: string | null
@@ -74,6 +76,7 @@ export type Database = {
           notified_terminal?: boolean
           notified_cancelled?: boolean
           notified_skipped?: boolean
+          notified_completed?: boolean
           joined_at?: string
           started_at?: string | null
           completed_at?: string | null

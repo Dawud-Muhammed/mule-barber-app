@@ -8,7 +8,7 @@ type QueueEntry = Database['public']['Tables']['queue_entries']['Row'];
 type NotificationTarget = {
   entry: QueueEntry;
   type: NotificationType;
-  flag: 'notified_promoted' | 'notified_pos_1' | 'notified_pos_2' | 'notified_pos_3' | 'notified_terminal' | 'notified_cancelled' | 'notified_skipped';
+  flag: 'notified_promoted' | 'notified_pos_1' | 'notified_pos_2' | 'notified_pos_3' | 'notified_terminal' | 'notified_cancelled' | 'notified_skipped' | 'notified_completed';
 };
 
 function targetForPosition(entry: QueueEntry, position: number): NotificationTarget | null {
@@ -78,10 +78,14 @@ export async function hasNotificationError(entryId: string): Promise<boolean> {
 
 export async function notifyTerminalEntry(
   entryId: string,
-  type: 'cancelled' | 'skipped'
+  type: 'cancelled' | 'skipped' | 'completed'
 ): Promise<void> {
   const admin = createAdminClient();
-  const flag = type === 'cancelled' ? 'notified_cancelled' : 'notified_skipped';
+  const flag = type === 'cancelled'
+    ? 'notified_cancelled'
+    : type === 'skipped'
+      ? 'notified_skipped'
+      : 'notified_completed';
   const { data: entry } = await admin
     .from('queue_entries')
     .select('telegram_chat_id')

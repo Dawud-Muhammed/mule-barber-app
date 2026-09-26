@@ -51,6 +51,7 @@ async function advanceEntry(entryId: string, newStatus: 'completed' | 'skipped')
       return { success: false, error: 'Generic failure' };
     }
     if (newStatus === 'skipped') await notifyTerminalEntry(entryId, 'skipped');
+    if (newStatus === 'completed') await notifyTerminalEntry(entryId, 'completed');
     await notifyAfterChange();
     return { success: true, promotedEntry: data as unknown as QueueEntry };
   } catch (error) {

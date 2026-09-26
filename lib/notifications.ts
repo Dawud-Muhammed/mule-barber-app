@@ -1,4 +1,4 @@
-export type NotificationType = 'promoted' | 'pos_1' | 'pos_2' | 'pos_3' | 'terminal' | 'cancelled' | 'skipped';
+export type NotificationType = 'promoted' | 'pos_1' | 'pos_2' | 'pos_3' | 'terminal' | 'cancelled' | 'skipped' | 'completed';
 
 export interface TelegramSendResult {
   success: boolean;
@@ -14,6 +14,7 @@ export function getNotificationMessage(type: NotificationType): string {
     terminal: '3 people are ahead of you.',
     cancelled: 'Your spot was cancelled. If this is a mistake, message us.',
     skipped: 'We moved to the next person because we could not reach you. Message us to rejoin.',
+    completed: 'Thank you for coming.',
   };
 
   return messages[type];
