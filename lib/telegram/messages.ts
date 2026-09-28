@@ -7,6 +7,8 @@ export type MessageKey =
   | 'invalid_name'
   | 'ask_phone'
   | 'invalid_phone'
+  | 'ask_quantity'
+  | 'invalid_quantity'
   | 'confirm_join'
   | 'btn_join'
   | 'btn_cancel'
@@ -42,7 +44,9 @@ const messages: Record<Language, Record<MessageKey, MessageTemplate>> = {
     invalid_name: 'እባክዎ እውነተኛ ስምዎን ይጻፉ።',
     ask_phone: 'ስልክ ቁጥርዎ ስንት ነው?',
     invalid_phone: 'እባክዎ ትክክለኛ ስልክ ቁጥር ይጻፉ፡ ለምሳሌ 0912345678።',
-    confirm_join: (params) => `${params.name} — ${params.service}። በወረፋ ውስጥ ይቀላቀላሉ?`,
+    ask_quantity: 'ስንት እርጥብ ይፈልጋሉ?',
+    invalid_quantity: 'እባክዎ ከ1 በላይ የሆነ ሙሉ ቁጥር ያስገቡ።',
+    confirm_join: (params) => `${params.name} — ${params.service}\nብዛት፦ ${params.quantity}\nበወረፋ ውስጥ ይቀላቀላሉ?`,
     btn_join: 'ቀላቀል',
     btn_cancel: 'ሰርዝ',
     joined: (params) => `ከእርስዎ በፊት፦ ${params.a} ${Number(params.a) === 1 ? 'ሰው' : 'ሰዎች'}\nተራዎ ሲቃረብ መልእክት እንልክልዎታለን።`,
@@ -72,7 +76,9 @@ const messages: Record<Language, Record<MessageKey, MessageTemplate>> = {
     invalid_name: 'Please type your real name.',
     ask_phone: 'What is your phone number?',
     invalid_phone: 'Please type a valid phone number, for example 0912345678.',
-    confirm_join: (params) => `${params.name} - ${params.service}. Join the line?`,
+    ask_quantity: 'How many portions do you want?',
+    invalid_quantity: 'Please enter a whole number greater than 0.',
+    confirm_join: (params) => `${params.name} - ${params.service}\nQuantity: ${params.quantity}\nJoin the line?`,
     btn_join: 'Join',
     btn_cancel: 'Cancel',
     joined: (params) => `People ahead of you: ${params.a}\nWe will message you when your turn is near.`,

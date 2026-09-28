@@ -74,8 +74,8 @@ export function alreadyInLineMessage(language: Language, queueNumber: number, co
   return t(language, 'already_in_line', { n: queueNumber, a: countAhead });
 }
 
-export function confirmServiceMessage(language: Language, name: string, service: string): string {
-  return t(language, 'confirm_join', { name, service });
+export function confirmServiceMessage(language: Language, name: string, service: string, quantity: number): string {
+  return t(language, 'confirm_join', { name, service, quantity });
 }
 
 export function genericFailureMessage(language: Language): string {

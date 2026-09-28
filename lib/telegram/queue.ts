@@ -55,7 +55,8 @@ export async function joinQueue(
   chatId: number,
   clientName: string,
   clientPhone: string,
-  serviceId: string
+  serviceId: string,
+  quantity: number
 ): Promise<JoinQueueResult> {
   try {
     const admin = createAdminClient();
@@ -67,6 +68,7 @@ export async function joinQueue(
       p_client_name: clientName,
       p_client_phone: clientPhone,
       p_service_id: serviceId,
+      p_quantity: quantity,
     });
 
     if (error) {

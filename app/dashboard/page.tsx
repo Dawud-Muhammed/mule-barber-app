@@ -24,6 +24,7 @@ function Identity({ entry }: { entry: QueueEntry }) {
   return (
     <div>
       <p className="font-semibold text-white">{entry.client_name || 'Guest'}</p>
+      <p className="text-sm text-slate-300">Quantity: {entry.quantity}</p>
       {entry.client_phone && (
         <a className="text-sm text-blue-300 underline" href={`tel:${entry.client_phone}`}>
           {entry.client_phone}

@@ -26,6 +26,7 @@ export type Database = {
           client_name: string | null
           client_phone: string | null
           service_id: string | null
+          quantity: number
           status: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled' | 'requeued' | 'lost'
           notified_close: boolean
           notified_next: boolean
@@ -47,6 +48,7 @@ export type Database = {
           client_name?: string | null
           client_phone?: string | null
           service_id?: string | null
+          quantity?: number
           status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled' | 'requeued' | 'lost'
           notified_close?: boolean
           notified_next?: boolean
@@ -68,6 +70,7 @@ export type Database = {
           client_name?: string | null
           client_phone?: string | null
           service_id?: string | null
+          quantity?: number
           status?: 'waiting' | 'in_service' | 'completed' | 'skipped' | 'cancelled' | 'requeued' | 'lost'
           notified_close?: boolean
           notified_next?: boolean
@@ -158,6 +161,7 @@ export type Database = {
           p_client_name: string
           p_client_phone: string
           p_service_id: string
+          p_quantity: number
         }
         Returns: Json
       }

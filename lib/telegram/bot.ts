@@ -30,6 +30,7 @@ function resetFlow(session: SessionData) {
   session.selectedServiceName = undefined;
   session.clientName = undefined;
   session.clientPhone = undefined;
+  session.quantity = undefined;
 }
 
 async function getLanguage(ctx: BotContext): Promise<Language | null> {
@@ -150,14 +151,15 @@ export function createBot(): Bot<BotContext> {
     const serviceId = ctx.session.selectedServiceId;
     const name = ctx.session.clientName;
     const phone = ctx.session.clientPhone;
-    if (!serviceId || !name || !phone) {
+    const quantity = ctx.session.quantity;
+    if (!serviceId || !name || !phone || !quantity) {
       await ctx.editMessageText(genericFailureMessage(language));
       resetFlow(ctx.session);
       await ctx.answerCallbackQuery();
       return;
     }
 
-    const result = await joinQueue(ctx.chat!.id, name, phone, serviceId);
+    const result = await joinQueue(ctx.chat!.id, name, phone, serviceId, quantity);
     if (!result.success) {
       await ctx.editMessageText(result.errorCode === 'shop_closed' ? queueClosedMessage(language) : genericFailureMessage(language));
       resetFlow(ctx.session);
@@ -229,8 +231,20 @@ export function createBot(): Bot<BotContext> {
         return;
       }
       ctx.session.clientPhone = phone;
+      ctx.session.step = 'awaiting_quantity';
+      await ctx.reply(t(language, 'ask_quantity'));
+      return;
+    }
+
+    if (ctx.session.step === 'awaiting_quantity') {
+      const quantityText = ctx.message.text.trim();
+      if (!/^[0-9]+$/.test(quantityText) || Number(quantityText) <= 0) {
+        await ctx.reply(t(language, 'invalid_quantity'));
+        return;
+      }
+      ctx.session.quantity = Number(quantityText);
       ctx.session.step = 'confirming_join';
-      await ctx.reply(confirmServiceMessage(language, ctx.session.clientName!, ctx.session.selectedServiceName!), {
+      await ctx.reply(confirmServiceMessage(language, ctx.session.clientName!, ctx.session.selectedServiceName!, ctx.session.quantity), {
         reply_markup: confirmJoinKeyboard(language),
       });
       return;
