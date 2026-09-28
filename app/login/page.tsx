@@ -61,8 +61,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">Mule Barber</h1>
-          <p className="text-slate-400">Queue Dashboard</p>
+          <h1 className="text-4xl font-bold text-white mb-2">Campus Fast Food</h1>
+          <p className="text-slate-400">Line Dashboard</p>
         </div>
 
         {/* Card */}

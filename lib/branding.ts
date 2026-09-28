@@ -1,15 +1,15 @@
 /**
- * Mule Barber branding and constants.
+ * Campus fast-food branding and constants.
  * Color palette, typography, messaging.
  */
 
 export const BRANDING = {
-  name: 'Mule Barber',
-  tagline: 'Queue Management',
+  name: 'Campus Fast Food',
+  tagline: 'Line Management',
 
   // Color palette
   colors: {
-    // Primary: warm amber/gold (barber shop classic)
+    // Primary: warm amber/gold for a food-service interface.
     primary: '#D97706', // amber-600
     primaryDark: '#B45309', // amber-700
     primaryLight: '#FCD34D', // amber-300

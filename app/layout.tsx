@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Mule Barber - Queue Management",
-  description: "Real-time queue management for Mule Barber",
+  title: "Campus Fast Food - Line Management",
+  description: "Real-time line management for campus fast food",
 };
 
 interface LayoutProps {

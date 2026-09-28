@@ -119,7 +119,7 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="border-b border-slate-800 bg-slate-900 px-4 py-4"><div className="mx-auto flex max-w-3xl items-center justify-between"><div><h1 className="text-2xl font-bold">Mule Barber</h1><p className="text-sm text-slate-400">Today&apos;s line</p></div><button onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); router.push('/login'); }} className="rounded bg-slate-700 px-3 py-2 text-sm">Sign out</button></div></header>
+      <header className="border-b border-slate-800 bg-slate-900 px-4 py-4"><div className="mx-auto flex max-w-3xl items-center justify-between"><div><h1 className="text-2xl font-bold">Campus Fast Food</h1><p className="text-sm text-slate-400">Today&apos;s line</p></div><button onClick={async () => { await fetch('/api/auth/logout', { method: 'POST' }); router.push('/login'); }} className="rounded bg-slate-700 px-3 py-2 text-sm">Sign out</button></div></header>
       {error && <div className="border-b border-red-900 bg-red-950 px-4 py-3 text-sm text-red-200">{error}</div>}
       <div className="mx-auto max-w-3xl p-4">
         <nav className="mb-6 flex gap-2 border-b border-slate-800 pb-2">{([['live', 'Live'], ['done', 'Done today'], ['skipped', 'Skipped today'], ['lost', 'Lost']] as const).map(([value, label]) => <button key={value} onClick={() => setTab(value)} className={`px-3 py-2 text-sm ${tab === value ? 'border-b-2 border-blue-400 text-white' : 'text-slate-400'}`}>{label}</button>)}</nav>
